@@ -1,4 +1,4 @@
-from threading import Thread
+from threading import Thread, Condition
 from df.enhance import init_df, enhance
 import torch
 import wave
@@ -12,25 +12,36 @@ class Filter(Thread):
         self.model, self.df_state, _ = init_df("./DeepFilterNet3", config_allow_defaults=True)
         self.model.eval()
         self.collected_audio_data = np.array([], dtype=np.int16)
-        self.data_queue = shared_queue
+        self.data_queue : queue.Queue = shared_queue
         self.stop_event = event
-        self.collected_audio_data
+        self.condition = Condition()
+
+    def enhance_data(self, audio_tensor):
+        with torch.no_grad():
+            enhanced_tensor = enhance(self.model, self.df_state,
+                                     audio_tensor)
+        # Convert tensor back to numpy array
+        enhanced_tensor = enhanced_tensor.squeeze(0)
+        enhanced_audio_int16 = (enhanced_tensor * (1<<15)).to(torch.int16)
+        return enhanced_audio_int16
+
+    def process_input(self):
+            audio_tensor = torch.empty(0)
+            while not self.data_queue.empty():
+                audio_tensor = torch.cat((audio_tensor, self.data_queue.get()), dim=0)
+            enhanced_audio_int16 = self.enhance_data(audio_tensor)
+            self.collected_audio_data = np.append(self.collected_audio_data, enhanced_audio_int16)
 
     def run(self):
         while not self.stop_event.is_set():
-            try:
-                audio_tensor = self.data_queue.get(timeout=3)
-                with torch.no_grad():
-                    enhanced_tensor = enhance(self.model, self.df_state, 
-                                              audio_tensor)
-                # Convert tensor back to numpy array
-                enhanced_tensor = enhanced_tensor.squeeze(0)
-                enhanced_audio_int16 = (enhanced_tensor * (1<<15)).to(torch.int16)
-                self.collected_audio_data = np.append(self.collected_audio_data,
-                                                 enhanced_audio_int16)
-            except queue.Empty:
-                self.save()
-        print("filter thread stopping and saving")
+            with self.condition:
+                while self.data_queue.qsize() < 50:
+                    self.condition.wait(timeout=3)
+                self.process_input()
+        print("stopping and saving")
+        #handle remaining samples
+        if self.data_queue.qsize():
+            self.process_input()
         self.save()
 
     def save(self):
