@@ -9,12 +9,12 @@ import threading
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 48000  # DeepFilterNet is optimized for 48kHz
-CHUNK = 480 # Number of frames per buffer
+CHUNK = 4096 # Number of frames per buffer
 
 def main():
     q = queue.Queue()
     stop_event = threading.Event()
-    filter = Filter(q, stop_event)
+    filter = Filter(q, stop_event, CHUNK)
 # Initialize PyAudio
     audio = pyaudio.PyAudio()
 

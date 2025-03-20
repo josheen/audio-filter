@@ -7,7 +7,7 @@ import queue
 
 class Filter(Thread):
     RATE = 48000  # DeepFilterNet is optimized for 48kHz
-    def __init__(self, shared_queue, event):
+    def __init__(self, shared_queue, event, chunk_size):
         super().__init__()
         self.model, self.df_state, _ = init_df("./DeepFilterNet3", config_allow_defaults=True)
         self.model.eval()
@@ -15,6 +15,7 @@ class Filter(Thread):
         self.data_queue : queue.Queue = shared_queue
         self.stop_event = event
         self.condition = Condition()
+        self.chunk_size = chunk_size
 
     def enhance_data(self, audio_tensor):
         with torch.no_grad():
@@ -26,6 +27,7 @@ class Filter(Thread):
         return enhanced_audio_int16
 
     def process_input(self):
+            print('JO-SHEEN process')
             audio_tensor = torch.empty(0)
             while not self.data_queue.empty():
                 audio_tensor = torch.cat((audio_tensor, self.data_queue.get()), dim=0)
@@ -35,7 +37,7 @@ class Filter(Thread):
     def run(self):
         while not self.stop_event.is_set():
             with self.condition:
-                while self.data_queue.qsize() < 50:
+                while self.data_queue.qsize() < 10:
                     self.condition.wait(timeout=3)
                 self.process_input()
         print("stopping and saving")
