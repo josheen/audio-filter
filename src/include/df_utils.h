@@ -4,7 +4,7 @@
 #include <vector>
 #include <complex>
 #include <memory>
-
+#include <unordered_map>
 
 template <typename T>
 class ArrayViewMut2 {
@@ -29,19 +29,6 @@ private:
     size_t cols_;
 };
 
-template <typename T>
-class RealToComplex {
-public:
-    virtual ~RealToComplex() = default;
-    virtual void process(const std::vector<T>& input, std::vector<std::complex<T>>& output) const = 0;
-};
-
-template <typename T>
-class ComplexToReal {
-public:
-    virtual ~ComplexToReal() = default;
-    virtual void process(const std::vector<std::vector<T>>& input, std::vector<T>& output) const = 0;
-};
 
 class DFState {
     public:
@@ -63,17 +50,21 @@ class DFState {
         std::shared_ptr<RealToComplex<float>> fft_forward;
         std::shared_ptr<ComplexToReal<float>> fft_inverse;
         using View2D = ArrayViewMut2<float>;
-        float process(std::vector<float> noisy, View2D enh);
+        float process(std::vector<float> noisy, DFState::View2D enh);
         void analysis(const std::vector<float>& input, std::vector<std::complex<float>>& output);
 };
 
 class DFonnx {
     public:
         DFonnx();
+        virtual ~DFonnx() = default;
 };
 
 class DF {
     public:
+        DF();
+        virtual ~DF() = default;
         void frame_analysis(const std::vector<float>& input, std::vector<std::complex<float>>& output, DFState state);
-}
+};
+
 #endif //  DF_UTILS_H
