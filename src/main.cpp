@@ -1,28 +1,11 @@
 #include <iostream>
 #include <onnxruntime_cxx_api.h>
+#include "df_utils.h"
 
 int main() {
-    try {
-        Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "test");
-        Ort::SessionOptions session_options;
-        session_options.SetIntraOpNumThreads(1);
-
-        const char* model_path = "dfn2_onnx/export/enc.onnx";
-        Ort::Session session(env, model_path, session_options);
-
-        std::cout << "ONNX Runtime is working! Model loaded successfully." << std::endl;
-
-        size_t num_inputs = session.GetInputCount();
-        Ort::AllocatorWithDefaultOptions allocator;
-
-        for (size_t i = 0; i < num_inputs; i++) {
-            auto input_name = session.GetInputNameAllocated(i, allocator);
-            std::cout << "Input " << i << ": " << input_name.get() << std::endl;
-        }
-
-    } catch (const Ort::Exception& e) {
-        std::cerr << "ONNX Runtime error: " << e.what() << std::endl;
-        return -1;
-    }
-    return 0;
+    DF df;
+    std::vector<float> noisy_test = {1,2,3,4,5};
+    std::vector<float> buffer(3 * 4, 0.0f); // 3x4 matrix, all zero
+    DF::View2D example(buffer.data(), 3, 4);
+    std::cout << "process output " << df.process(noisy_test, example) << std::endl;
 }

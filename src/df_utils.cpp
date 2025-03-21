@@ -1,7 +1,6 @@
 #include "df_utils.h"
-#include <string>
 
-std::string test(const std::string& name) {
-    return "Hello, " + name + "!";
+DF::DF() {}
+float DF::process(std::vector<float> noisy, View2D enh) {
+    return 0.0;
 }
-
