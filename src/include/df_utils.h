@@ -5,6 +5,8 @@
 #include <complex>
 #include <memory>
 #include <unordered_map>
+#include "RealToComplex.h"
+#include "ComplexToReal.h"
 
 template <typename T>
 class ArrayViewMut2 {

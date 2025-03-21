@@ -38,7 +38,7 @@ public:
 
     void process(const std::vector<double>& input, std::vector<std::complex<double>>& output) const override;
     
-    std::unique_ptr<RealToComplex<float>> clone() const override {
+    std::unique_ptr<RealToComplex<double>> clone() const override {
         return std::make_unique<FFTWRealToComplex<double>>(*this);
     }
 
