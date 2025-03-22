@@ -26,6 +26,7 @@ add_executable(AudioFilter src/main.cpp)
 
 add_library(fftwc2r src/FFTWComplexToReal.cpp)
 add_library(fftwr2c src/FFTWRealtoComplex.cpp)
+add_library(dfstate src/DFState.cpp)
 add_library(Utils src/df_utils.cpp)
 target_include_directories(Utils PUBLIC
     ${PROJECT_SOURCE_DIR}/src/include
@@ -39,6 +40,15 @@ target_include_directories(fftwc2r PUBLIC
 target_include_directories(fftwr2c PUBLIC
     ${PROJECT_SOURCE_DIR}/src/include
     ${FFTW_INCLUDE_DIR}
+)
+
+target_include_directories(dfstate PUBLIC
+    ${PROJECT_SOURCE_DIR}/src/include
+    ${FFTW_INCLUDE_DIR}
+)
+
+target_link_libraries( dfstate PRIVATE
+    ${FFTW_LIB}
 )
 
 target_link_libraries(Utils PRIVATE
