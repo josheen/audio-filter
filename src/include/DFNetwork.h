@@ -1,13 +1,32 @@
+#ifndef DF_NETWORK_H
+#define DF_NETWORK_H
+
 #include "DFParams.h"
 #include "DFState.h"
 #include "RuntimeParams.h"
 #include <deque>
+#include <onnxruntime_cxx_api.h>
 
-// DFNetwork class definition
+struct TensorBuffer {
+    std::vector<float> data;
+    std::vector<int64_t> shape;
+
+    Ort::Value to_ort_tensor(Ort::MemoryInfo& mem_info) {
+        return Ort::Value::CreateTensor<float>(
+            mem_info,
+            data.data(),
+            data.size(),
+            shape.data(),
+            shape.size()
+        );
+    }
+};
+
 class DFNetwork {
     public:
         DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options);
         void process_audio(const std::vector<float>& audio_input, std::vector<float>& audio_output);
+        void init();
     private:
         float calc_norm_alpha(size_t sr, size_t hop_size, float tau) {
             float dt = static_cast<float>(hop_size) / static_cast<float>(sr);
@@ -21,6 +40,8 @@ class DFNetwork {
             }
             return a;
         }
+        Ort::MemoryInfo mem_info_;
+
         Ort::Session enc_session_;
         Ort::Session erb_dec_session_;
         Ort::Session df_dec_session_;
@@ -47,9 +68,9 @@ class DFNetwork {
         std::vector<DFState> df_states_;
 
         // Buffers:
-        std::vector<float> spec_buf_;
-        std::vector<float> erb_buf_;
-        std::vector<float> cplx_buf_;
+        TensorBuffer spec_buf_;
+        TensorBuffer erb_buf_;
+        TensorBuffer cplx_buf_;
         std::vector<float> m_zeros_;
         std::deque<std::vector<float>> rolling_spec_buf_y_;
         std::deque<std::vector<float>> rolling_spec_buf_x_;
@@ -58,3 +79,5 @@ class DFNetwork {
         float post_filter_beta_;
         size_t skip_counter_;
 };
+
+#endif
