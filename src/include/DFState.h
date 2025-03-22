@@ -32,9 +32,13 @@ private:
 
 class DFState {
     using View2D = ArrayViewMut2<float>;
+
     public:
         DFState(size_t sr, size_t fft_size, size_t hop_size, size_t nb_bands, size_t min_nb_freqs);
         virtual ~DFState() = default;
+        void init_norm_states(size_t nb_df_freqs);
+        void init_mean_norm_state();
+        void init_unit_norm_state(size_t nb_freqs);
         float process(std::vector<float> noisy, DFState::View2D enh);
         void analysis(const std::vector<float>& input, std::vector<std::complex<float>>& output);
 
