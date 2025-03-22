@@ -1,8 +1,8 @@
 #include <cmath>
 #include <cassert>
 #include "DFState.h"
-#include "RealFFTPlanner.h"
 #include "ERB_pub.h"
+#include "RealFFTPlanner.h"
 #include "FFTWRealToComplex.h"
 #include "FFTWComplexToReal.h"
 
@@ -69,4 +69,39 @@ void DFState::init_unit_norm_state(size_t nb_freqs) {
     for (size_t i = 0; i < nb_freqs; i++) {
         unit_norm_state_.push_back(UNIT_NORM_INIT_MIN + static_cast<float>(i) * step);
     }
+}
+
+
+std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t min_nb_freqs) {
+    size_t nyq_freq = sr / 2;
+    float freq_width = static_cast<float>(sr) / static_cast<float>(fft_size);
+    float erb_low = freq2erb(0.0f);
+    float erb_high = freq2erb(static_cast<float>(nyq_freq));
+    std::vector<size_t> erb(nb_bands, 0);
+    float step = (erb_high - erb_low) / static_cast<float>(nb_bands);
+    int prev_freq = 0;
+    int freq_over = 0;
+
+    for (int i = 0; i <= min_nb_freqs; i++) {
+        float f = erb2freq(erb_low + static_cast<float>(i) * step);
+        size_t fb = static_cast<size_t>(std::round(f / freq_width));
+        int nb_freqs = static_cast<int>(fb) - prev_freq - freq_over;
+        if (nb_freqs < static_cast<int>(min_nb_freqs)) {
+            freq_over = static_cast<int>(min_nb_freqs) - nb_freqs;
+            nb_freqs = static_cast<int>(min_nb_freqs);
+        } else {
+            freq_over = 0;
+        }
+        erb[i - 1] = static_cast<size_t>(nb_freqs);
+        prev_freq = fb;
+    }
+    erb[nb_bands - 1] += 1;
+    size_t too_large = 0;
+    size_t sum = 0;
+    for (const auto val : erb) sum += val;
+    too_large = sum - (fft_size / 2 + 1);
+    if (too_large > 0) {
+        erb[nb_bands - 1] -= too_large;
+    }
+    return erb;
 }

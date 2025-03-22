@@ -41,6 +41,8 @@ class DFState {
         void init_unit_norm_state(size_t nb_freqs);
         float process(std::vector<float> noisy, DFState::View2D enh);
         void analysis(const std::vector<float>& input, std::vector<std::complex<float>>& output);
+        std::vector<float> mean_norm_state_;
+        std::vector<float> unit_norm_state_;
 
     private:
         size_t sr_;
@@ -56,7 +58,5 @@ class DFState {
         std::vector<size_t> erb_;
         std::vector<float> analysis_mem_;
         std::vector<float> synthesis_mem_;
-        std::vector<float> mean_norm_state_;
-        std::vector<float> unit_norm_state_;
 };
 #endif
