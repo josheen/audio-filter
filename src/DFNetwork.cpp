@@ -1,143 +1,17 @@
-#include "df_utils.h"
 #include <map>
 #include <string>
 #include <fstream>
 #include <stdexcept>
 #include <iostream>
 #include <cstdint>
-
-RuntimeParams::RuntimeParams(
-    size_t n_ch,
-    float post_filter_beta,
-    float atten_lim_db,
-    float min_db_thresh,
-    float max_db_erb_thresh,
-    float max_db_df_thresh,
-    ReduceMask reduce_mask
-)
-    : n_ch_(n_ch),
-      post_filter_(post_filter_beta > 0.0f),
-      post_filter_beta_(post_filter_beta),
-      atten_lim_db_(atten_lim_db),
-      min_db_thresh_(min_db_thresh),
-      max_db_erb_thresh_(max_db_erb_thresh),
-      max_db_df_thresh_(max_db_df_thresh),
-      reduce_mask_(reduce_mask)
-{}
-
-RuntimeParams RuntimeParams::default_with_ch(size_t channels) {
-    return RuntimeParams(
-        channels,   // n_ch
-        0.02f,      // post_filter_beta
-        100.f,      // atten_lim_db
-        -10.f,      // min_db_thresh
-        30.f,       // max_db_erb_thresh
-        20.f,       // max_db_df_thresh
-        ReduceMask::MEAN // reduce_mask
-    );
-}
-
-RuntimeParams& RuntimeParams::with_post_filter(float beta) {
-    assert(beta >= 0.0f);
-    if (beta > 0.0f) {
-        post_filter_ = true;
-    }
-    post_filter_beta_ = beta;
-    return *this;
-}
-
-RuntimeParams& RuntimeParams::with_atten_lim(float atten_lim_db) {
-    atten_lim_db_ = atten_lim_db;
-    return *this;
-}
-
-RuntimeParams& RuntimeParams::with_thresholds(float min_db_thresh,
-        float max_db_erb_thresh, float max_db_df_thresh) {
-    min_db_thresh_ = min_db_thresh;
-    max_db_erb_thresh_ = max_db_erb_thresh;
-    max_db_df_thresh_ = max_db_df_thresh;
-    return *this;
-}
-
-RuntimeParams& RuntimeParams::with_mask_reduce(ReduceMask red) {
-    reduce_mask_ = red;
-    return *this;
-}
-
-class DfParams {
-public:
-    std::vector<uint8_t> enc_;
-    std::vector<uint8_t> erb_dec_;
-    std::vector<uint8_t> df_dec_;
-    std::map<std::string, std::map<std::string, std::string>> config_;
-
-    DfParams(const std::string& enc_path, const std::string& erb_dec_path, const std::string& df_dec_path, const std::string& config_path) {
-        enc_ = read_file(enc_path);
-        erb_dec_ = read_file(erb_dec_path);
-        df_dec_ = read_file(df_dec_path);
-        config_ = parse_config(config_path);
-    }
-
-    const std::map<std::string, std::string>& section(const std::string& section) const {
-        auto it = config_.find(section);
-        if (it == config_.end()) {
-            throw std::runtime_error("Config section not found: " + section);
-        }
-        return it->second;
-    }
-
-private:
-    std::vector<uint8_t> read_file(const std::string& path) {
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
-            throw std::runtime_error("Failed to open file: " + path);
-        }
-        return std::vector<uint8_t>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    }
-
-    std::map<std::string, std::map<std::string, std::string>> parse_config(const std::string& path) {
-        std::map<std::string, std::map<std::string, std::string>> config;
-        std::ifstream file(path);
-        if (!file) {
-            throw std::runtime_error("Failed to open config file: " + path);
-        }
-
-        std::string line;
-        std::string current_section;
-        while (std::getline(file, line)) {
-            // Trim whitespace
-            line.erase(0, line.find_first_not_of(" \t"));
-            line.erase(line.find_last_not_of(" \t\r\n") + 1);
-
-            // Skip empty lines or comments
-            if (line.empty() || line[0] == ';' || line[0] == '#') continue;
-
-            if (line.front() == '[' && line.back() == ']') {
-                // Found section
-                current_section = line.substr(1, line.size() - 2);
-            } else {
-                size_t delimiter = line.find('=');
-                if (delimiter != std::string::npos) {
-                    std::string key = line.substr(0, delimiter);
-                    std::string value = line.substr(delimiter + 1);
-                    key.erase(0, key.find_first_not_of(" \t"));
-                    key.erase(key.find_last_not_of(" \t") + 1);
-                    value.erase(0, value.find_first_not_of(" \t"));
-                    value.erase(value.find_last_not_of(" \t") + 1);
-                    config[current_section][key] = value;
-                }
-            }
-        }
-        return config;
-    }
-
-};
-
+#include "DFParams.h"
+#include "DFState.h"
+#include "RuntimeParams.h"
 
 // DFNetwork class definition
 class DFNetwork {
     public:
-        DFNetwork(const DfParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options)
+        DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options)
             : enc_session_(env, df_params.enc_.data(), df_params.enc_.size(), session_options),
             erb_dec_session_(env, df_params.erb_dec_.data(), df_params.erb_dec_.size(), session_options),
             df_dec_session_(env, df_params.df_dec_.data(), df_params.df_dec_.size(), session_options) {
@@ -182,7 +56,6 @@ class DFNetwork {
                 atten_lim_ = std::pow(10.0f, -atten_lim_db / 20.0f);
             }
 
-            // Buffer allocation (using vectors for now; you could move to Ort::Value for spec_buf_/erb_buf_ if desired)
             spec_buf_.resize(n_freqs_ * 2, 0.0f);
             erb_buf_.resize(nb_erb_, 0.0f);
             cplx_buf_.resize(nb_df_ * 2, 0.0f);
