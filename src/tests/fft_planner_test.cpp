@@ -15,8 +15,8 @@ TEST(FFTPlannerTest, ForwardFFTConstantSignal) {
     auto forward_plan = planner.plan_fft_forward(size);
 
     std::vector<float> input(size, 1.0f);
-    std::vector<std::complex<float>> freq;
-    forward_plan->process(input, freq);
+    std::vector<std::complex<float>> freq(size / 2 + 1);
+    forward_plan->process(input.data(), freq.data());
 
     // Check DC bin
     EXPECT_NEAR(freq[0].real(), size, 1e-3);
@@ -44,11 +44,11 @@ TEST(FFTPlannerTest, RoundTripAccuracy) {
         input[i] = sin(2 * M_PI * i / size);
     }
 
-    std::vector<std::complex<float>> freq;
-    forward_plan->process(input, freq);
+    std::vector<std::complex<float>> freq(size / 2 + 1);
+    forward_plan->process(input.data(), freq.data());
 
-    std::vector<float> output;
-    inverse_plan->process(freq, output);
+    std::vector<float> output(size);
+    inverse_plan->process(freq.data(), output.data());
 
     for (size_t i = 0; i < size; i++) {
         EXPECT_NEAR(output[i] / size, input[i], 1e-3);

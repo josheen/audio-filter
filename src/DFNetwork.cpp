@@ -3,6 +3,59 @@
 #include <stdexcept>
 #include <iostream>
 
+float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& enhanced_frame) {
+    assert(noisy_frame.rows() == ch_);
+    assert(noisy_frame.cols() == hop_size_);
+    enhanced_frame.resize(ch_, hop_size_);
+
+    float max_a = noisy_frame.cwiseAbs().maxCoeff();
+    float rms = noisy_frame.squaredNorm() / noisy_frame.size();
+    if (rms < 1e-7f) {
+        skip_counter_++;
+    } else {
+        skip_counter_ = 0;
+    }
+    if (skip_counter_ > 5) {
+        enhanced_frame.setZero();
+        return -15.0f;   // early skip return
+    }
+    if (max_a > 0.9999f) {
+        std::cout << "Warning: Possible clipping detected (" << max_a << ")\n";
+    }
+
+    rolling_spec_buf_y_.pop_front();
+    rolling_spec_buf_x_.pop_front();
+
+    for (size_t ch = 0; ch < ch_; ++ch) {
+        auto& state = df_states_[ch];
+        Eigen::Map<Eigen::Matrix<std::complex<float>, Eigen::Dynamic, 1>> spec(
+            reinterpret_cast<std::complex<float>*>(spec_buf_.data.data()) + ch * n_freqs_, n_freqs_);
+
+        state.analysis(noisy_frame.row(ch).data(), spec.data());
+    }
+
+    rolling_spec_buf_y_.push_back(spec_buf_.data);
+    rolling_spec_buf_x_.push_back(spec_buf_.data);
+
+    if (atten_lim_.has_value() && atten_lim_.value() == 1.0f) {
+        enhanced_frame = noisy_frame;
+        return 35.0f;
+    }
+
+    float lsnr = 0.0f;
+    Eigen::MatrixXf gains;
+    Eigen::MatrixXf coefs;
+    //lsnr, gains, coefs = process_raw();
+
+    for (size_t ch = 0; ch < ch_; ++ch) {
+        auto& state = df_states_[ch];
+        Eigen::Map<Eigen::Matrix<std::complex<float>, Eigen::Dynamic, 1>> spec(
+            reinterpret_cast<std::complex<float>*>(spec_buf_.data.data()) + ch * n_freqs_, n_freqs_);
+        //state.synthesis(spec, enhanced_frame.row(ch).data());
+    }
+
+    return lsnr;
+}
 DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options)
     : enc_session_(env, df_params.enc_.data(), df_params.enc_.size(), session_options),
     erb_dec_session_(env, df_params.erb_dec_.data(), df_params.erb_dec_.size(), session_options),
@@ -129,11 +182,5 @@ void DFNetwork::init() {
     cplx_buf_.shape = {static_cast<int64_t>(ch_), 1, static_cast<int64_t>(nb_df_), 2};
 
     std::cout << "DFNetwork::init() completed.\n";
-}
-
-// Example stub for processing (can be extended later)
-void DFNetwork::process_audio(const std::vector<float>& audio_input, std::vector<float>& audio_output) {
-    std::cout << "Processing audio with DFNetwork...\n";
-    audio_output = audio_input;
 }
 

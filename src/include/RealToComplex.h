@@ -7,7 +7,7 @@ template <typename T>
 class RealToComplex {
 public:
     virtual ~RealToComplex() = default;
-    virtual void process(const std::vector<T>& input, std::vector<std::complex<T>>& output) const = 0;
+    virtual void process(float* input, std::complex<float>* output) const = 0;
     virtual std::unique_ptr<RealToComplex<T>> clone() const = 0;
 };
 #endif

@@ -71,6 +71,56 @@ void DFState::init_unit_norm_state(size_t nb_freqs) {
     }
 }
 
+void DFState::analysis(const float* input, std::complex<float>* output) {
+    assert(input != nullptr);
+    assert(output != nullptr);
+    assert(frame_size_ > 0 && freq_size_ > 0);
+
+    frame_analysis(input, output, *this);
+}
+
+void DFState::frame_analysis(const float* input, std::complex<float>* output, DFState& state) {
+    assert(state.frame_size_ > 0 && state.freq_size_ > 0);
+
+    std::vector<float> buf(state.window_size_, 0.0f);
+
+    size_t split = state.window_size_ - state.frame_size_;
+    auto buf_first = buf.begin();
+    auto buf_second = buf.begin() + split;
+    auto window_first = state.window_.begin();
+    auto window_second = state.window_.begin() + split;
+
+    // Fill first part of buf from analysis_mem_ * window_first
+    for (size_t i = 0; i < split; i++) {
+        buf_first[i] = state.analysis_mem_[i] * window_first[i];
+    }
+
+    // Fill second part from input * window_second
+    for (size_t i = 0; i < state.frame_size_; i++) {
+        buf_second[i] = input[i] * window_second[i];
+    }
+
+    // Rotate analysis_mem_ if hop size < window_size / 2
+    size_t analysis_split = state.analysis_mem_.size() - state.frame_size_;
+    if (analysis_split > 0) {
+        std::rotate(state.analysis_mem_.begin(),
+                    state.analysis_mem_.begin() + state.frame_size_,
+                    state.analysis_mem_.end());
+    }
+
+    // Copy input frame into analysis_mem_ tail
+    for (size_t i = 0; i < state.frame_size_; i++) {
+        state.analysis_mem_[analysis_split + i] = input[i];
+    }
+
+    // Run FFT with scratch
+    state.fft_forward_->process(buf.data(), output);
+
+    // Normalize
+    for (size_t i = 0; i < state.freq_size_; i++) {
+        output[i] *= state.wnorm_;
+    }
+}
 
 std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t min_nb_freqs) {
     size_t nyq_freq = sr / 2;

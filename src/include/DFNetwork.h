@@ -6,6 +6,7 @@
 #include "RuntimeParams.h"
 #include <deque>
 #include <onnxruntime_cxx_api.h>
+#include <Eigen/Dense>
 
 struct TensorBuffer {
     std::vector<float> data;
@@ -25,7 +26,7 @@ struct TensorBuffer {
 class DFNetwork {
     public:
         DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options);
-        void process_audio(const std::vector<float>& audio_input, std::vector<float>& audio_output);
+        float process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& enhanced_frame);
         void init();
         std::deque<std::vector<float>> rolling_spec_buf_y_;
         std::deque<std::vector<float>> rolling_spec_buf_x_;

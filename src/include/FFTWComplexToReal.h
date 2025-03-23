@@ -14,38 +14,13 @@ template <>
 class FFTWComplexToReal<float> : public ComplexToReal<float> {
 public:
     explicit FFTWComplexToReal(size_t size);
-    ~FFTWComplexToReal();
+    ~FFTWComplexToReal() override;
 
-    void process(const std::vector<std::complex<float>>& input, std::vector<float>& output) const override;
-
-    std::unique_ptr<ComplexToReal<float>> clone() const override {
-        return std::make_unique<FFTWComplexToReal<float>>(*this);
-    }
+    void process(std::complex<float>* input, float* output) const override;
+    std::unique_ptr<ComplexToReal<float>> clone() const override;
 
 private:
     size_t size_;
     fftwf_plan plan_;
-    mutable std::vector<std::complex<float>> input_buffer_;
-    mutable std::vector<float> output_buffer_;
-};
-
-// Specialization for double
-template <>
-class FFTWComplexToReal<double> : public ComplexToReal<double> {
-public:
-    explicit FFTWComplexToReal(size_t size);
-    ~FFTWComplexToReal();
-
-    void process(const std::vector<std::complex<double>>& input, std::vector<double>& output) const override;
-    std::unique_ptr<ComplexToReal<double>> clone() const override {
-        return std::make_unique<FFTWComplexToReal<double>>(*this);
-    }
-
-private:
-    size_t size_;
-    fftw_plan plan_;
-    mutable std::vector<std::complex<double>> input_buffer_;
-    mutable std::vector<double> output_buffer_;
 };
 #endif
-

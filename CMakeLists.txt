@@ -10,6 +10,7 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/src/include
     ${PROJECT_SOURCE_DIR}/src/fftw/include
     ${PROJECT_SOURCE_DIR}/src/onnx/include
+    ${PROJECT_SOURCE_DIR}/third_party/eigen
 )
 
 set(FFTW_ROOT ${PROJECT_SOURCE_DIR}/src/fftw)
