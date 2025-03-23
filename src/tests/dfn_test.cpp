@@ -4,6 +4,11 @@
 #include "RuntimeParams.h"
 #include <onnxruntime_cxx_api.h>
 
+
+#define EXPECT_COMPLEX_EQ(expected, actual) \
+    EXPECT_FLOAT_EQ((expected).real(), (actual).real()); \
+    EXPECT_FLOAT_EQ((expected).imag(), (actual).imag())
+
 const std::string MODEL_DIR = MODEL_PATH;
 const std::string ENC_MODEL_PATH = MODEL_DIR + "/enc.onnx";
 const std::string ERB_DEC_MODEL_PATH = MODEL_DIR + "/erb_dec.onnx";
@@ -38,9 +43,9 @@ TEST_F(DFNetworkTestFixture, BufferInitialization) {
     EXPECT_EQ(network_->rolling_spec_buf_y_.size(), network_->df_order_ + network_->conv_lookahead_);
     size_t expected_size = network_->ch_ * network_->n_freqs_ * 2;  // channels * freqs * 2
     for (const auto& buf : network_->rolling_spec_buf_y_) {
-        EXPECT_EQ(buf.size(), expected_size);
-        for (float val : buf) {
-            EXPECT_FLOAT_EQ(val, 0.0f);
+        EXPECT_EQ(buf.data.size(), expected_size);
+        for (std::complex<float> val : buf.data) {
+            EXPECT_COMPLEX_EQ(val, std::complex<float>(0.0f, 0.0f));
         }
     }
 

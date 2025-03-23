@@ -7,20 +7,26 @@
 #include <deque>
 #include <onnxruntime_cxx_api.h>
 #include <Eigen/Dense>
+#include <Eigen/Core>
 
 struct TensorBuffer {
     std::vector<float> data;
     std::vector<int64_t> shape;
+    // Default constructor
+    TensorBuffer() = default;
+    // Copy constructor
+    TensorBuffer(const TensorBuffer& other)
+        : data(other.data), shape(other.shape) {}
+};
 
-    Ort::Value to_ort_tensor(Ort::MemoryInfo& mem_info) {
-        return Ort::Value::CreateTensor<float>(
-            mem_info,
-            data.data(),
-            data.size(),
-            shape.data(),
-            shape.size()
-        );
-    }
+struct TensorComplex {
+    std::vector<std::complex<float>> data;
+    std::vector<int64_t> shape;
+    // Default constructor
+    TensorComplex() = default;
+    // Copy constructor
+    TensorComplex(const TensorComplex& other)
+        : data(other.data), shape(other.shape) {}
 };
 
 class DFNetwork {
@@ -28,13 +34,13 @@ class DFNetwork {
         DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options);
         float process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& enhanced_frame);
         void init();
-        std::deque<std::vector<float>> rolling_spec_buf_y_;
-        std::deque<std::vector<float>> rolling_spec_buf_x_;
+        std::deque<TensorComplex> rolling_spec_buf_y_;
+        std::deque<TensorComplex> rolling_spec_buf_x_;
         size_t ch_;
         size_t df_order_;
         size_t conv_lookahead_;
         size_t n_freqs_;
-        TensorBuffer spec_buf_;
+        TensorComplex spec_buf_;
         Ort::MemoryInfo mem_info_;
         Ort::Session enc_session_;
         Ort::Session erb_dec_session_;

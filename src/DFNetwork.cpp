@@ -27,15 +27,16 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
     rolling_spec_buf_x_.pop_front();
 
     for (size_t ch = 0; ch < ch_; ++ch) {
-        auto& state = df_states_[ch];
-        Eigen::Map<Eigen::Matrix<std::complex<float>, Eigen::Dynamic, 1>> spec(
-            reinterpret_cast<std::complex<float>*>(spec_buf_.data.data()) + ch * n_freqs_, n_freqs_);
-
-        state.analysis(noisy_frame.row(ch).data(), spec.data());
+        // Get the noisy frame for the current channel
+        auto noisy_frame_ch = noisy_frame.row(ch);
+        // Get the spectral buffer for the current channel
+        std::complex<float>* spec_buf_ch = spec_buf_.data.data() + ch * n_freqs_;
+        // Perform analysis
+        df_states_[ch].analysis(noisy_frame_ch.data(), spec_buf_ch);
     }
 
-    rolling_spec_buf_y_.push_back(spec_buf_.data);
-    rolling_spec_buf_x_.push_back(spec_buf_.data);
+    rolling_spec_buf_y_.push_back(TensorComplex(spec_buf_));
+    rolling_spec_buf_x_.push_back(TensorComplex(spec_buf_));
 
     if (atten_lim_.has_value() && atten_lim_.value() == 1.0f) {
         enhanced_frame = noisy_frame;
@@ -102,7 +103,7 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
             atten_lim_ = std::pow(10.0f, -atten_lim_db / 20.0f);
         }
 
-        spec_buf_.data.resize(n_freqs_ * 2, 0.0f);
+        spec_buf_.data.resize(n_freqs_ * 2, std::complex<float>(0.0f, 0.0f));
         spec_buf_.shape = {1, 1, 1, static_cast<int64_t>(n_freqs_), 2};
 
         erb_buf_.data.resize(ch_ * nb_erb_, 0.0f);
@@ -128,13 +129,16 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
 
         // Pre-allocate rolling buffers if needed
         size_t spec_buf_size = ch_ * 1 * 1 * n_freqs_ * 2;
+        TensorComplex empty;
+        empty.data.assign(spec_buf_size, std::complex<float>(0.0f, 0.0f));
+        empty.shape = {static_cast<int64_t>(ch_), 1, 1, static_cast<int64_t>(n_freqs_), 2};
         rolling_spec_buf_y_.clear();
         for (size_t i = 0; i < (df_order_ + lookahead_); i++) {
-            rolling_spec_buf_y_.emplace_back(std::vector<float>(spec_buf_size, 0.0f));
+            rolling_spec_buf_y_.emplace_back(empty);
         }
         rolling_spec_buf_x_.clear();
         for (size_t i = 0; i < std::max(lookahead_, df_order_); i++) {
-            rolling_spec_buf_x_.emplace_back(std::vector<float>(spec_buf_size, 0.0f));
+            rolling_spec_buf_x_.emplace_back(empty);
         }
 
         // Store runtime params
@@ -151,15 +155,17 @@ void DFNetwork::init() {
     size_t spec_buf_size = ch_ * 1 * 1 * n_freqs_ * 2;
     std::cout << "Initializing DFNetwork rolling buffers and state...\n";
 
-    // Reset rolling_spec_buf_y_ with zero-filled vectors
+    TensorComplex empty;
+    empty.data.assign(spec_buf_size, std::complex<float>(0.0f, 0.0f));
+    empty.shape = {static_cast<int64_t>(ch_), 1, 1, static_cast<int64_t>(n_freqs_), 2};
     rolling_spec_buf_y_.clear();
     for (size_t i = 0; i < (df_order_ + conv_lookahead_); ++i) {
-        rolling_spec_buf_y_.emplace_back(std::vector<float>(spec_buf_size, 0.0f));
+        rolling_spec_buf_y_.emplace_back(empty);
     }
 
     rolling_spec_buf_x_.clear();
     for (size_t i = 0; i < std::max(df_order_, lookahead_); ++i) {
-        rolling_spec_buf_x_.emplace_back(std::vector<float>(spec_buf_size, 0.0f));
+        rolling_spec_buf_x_.emplace_back(empty);
     }
 
     // Make sure we have a DFState per channel
@@ -172,7 +178,7 @@ void DFNetwork::init() {
     }
 
     // Reset spec_buf_, erb_buf_, cplx_buf_ with correct zero data and shape
-    spec_buf_.data.assign(spec_buf_size, 0.0f);
+    spec_buf_.data.assign(spec_buf_size, std::complex<float>(0.0f, 0.0f));
     spec_buf_.shape = {static_cast<int64_t>(ch_), 1, 1, static_cast<int64_t>(n_freqs_), 2};
 
     erb_buf_.data.assign(ch_ * nb_erb_, 0.0f);

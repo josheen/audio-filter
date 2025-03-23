@@ -108,12 +108,10 @@ void DFState::frame_analysis(const float* input, std::complex<float>* output, DF
                     state.analysis_mem_.end());
     }
 
-    // Copy input frame into analysis_mem_ tail
     for (size_t i = 0; i < state.frame_size_; i++) {
         state.analysis_mem_[analysis_split + i] = input[i];
     }
 
-    // Run FFT with scratch
     state.fft_forward_->process(buf.data(), output);
 
     // Normalize
