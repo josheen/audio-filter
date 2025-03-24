@@ -5,3 +5,5 @@ output.wav
 build/
 .cache/
 compile_commands.json
+enhanced_output.wav
+src/lib/*

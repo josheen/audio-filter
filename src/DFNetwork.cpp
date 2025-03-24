@@ -73,6 +73,7 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
                         spec_frame.data.data() + ch * n_freqs_,
                         n_freqs_
                         );
+
                 df_states_[ch].apply_mask(spec_ch_map, gains_map.row(ch));
             }
         }
@@ -181,6 +182,27 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
     Ort::Value emb_tensor = std::move(encoder_outputs[4]);
     Ort::Value c0_tensor = std::move(encoder_outputs[5]);
     Ort::Value lsnr_tensor = std::move(encoder_outputs[6]);
+
+    auto emb_tensor_info = emb_tensor.GetTensorTypeAndShapeInfo();
+    auto emb_shape = emb_tensor_info.GetShape();
+    size_t emb_num_elements = emb_tensor_info.GetElementCount();
+
+    // Assuming float tensor:
+    const float* emb_src_data = emb_tensor.GetTensorData<float>();
+
+    // Copy the data into a vector:
+    std::vector<float> emb_data_copy(emb_src_data, emb_src_data + emb_num_elements);
+
+    // Create a clone tensor from the copied data:
+    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
+    Ort::Value emb_tensor_clone = Ort::Value::CreateTensor<float>(
+            memory_info,
+            emb_data_copy.data(),
+            emb_data_copy.size(),
+            emb_shape.data(),
+            emb_shape.size()
+            );
+
     float lsnr = *(lsnr_tensor.GetTensorData<float>());
     auto [apply_gains, apply_gain_zeros, apply_df] = apply_stages(lsnr);
     // std::cout << "Enhancing frame with lsnr " << lsnr
@@ -196,7 +218,8 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
             std::move(e0_tensor)
         };
 
-        auto erb_output = erb_dec_session_.Run(Ort::RunOptions{nullptr},
+        auto erb_output = erb_dec_session_.Run(
+                Ort::RunOptions{nullptr},
                 erb_input_names_.data(),
                 erb_inputs.data(),
                 erb_inputs.size(),
@@ -205,6 +228,7 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
 
         // Remove unnecessary axes (this part you may handle by just taking the correct shape)
         m = OrtValueToTensorBuffer(erb_output.front());
+        m->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
     } else if (apply_gain_zeros) {
         m = TensorBuffer();
         m->data = std::vector<float>(ch_ * nb_erb_, 0.0f);
@@ -215,7 +239,7 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
     std::optional<TensorBuffer> coefs;
     if (apply_df) {
         std::array<Ort::Value, 2> df_inputs = {
-            std::move(emb_tensor),
+            std::move(emb_tensor_clone),
             std::move(c0_tensor)
         };
 
@@ -225,6 +249,8 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
                 df_inputs.size(),
                 df_dec_output_names_.data(),
                 1);
+        auto df_tensor_info = df_output.front().GetTensorTypeAndShapeInfo();
+        auto df_shape = df_tensor_info.GetShape();
         coefs = OrtValueToTensorBuffer(df_output.front());
         coefs->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_df_), static_cast<int64_t>(df_order_), 2};
     }
@@ -405,14 +431,9 @@ std::tuple<bool, bool, bool> DFNetwork::apply_stages(float lsnr) const {
 
 TensorBuffer OrtValueToTensorBuffer(const Ort::Value& ort_value) {
     TensorBuffer tb;
-    auto shape_info = ort_value.GetTensorTypeAndShapeInfo();
-    auto shape = shape_info.GetShape();
-    tb.shape = shape;
-
-    size_t size = shape_info.GetElementCount();
+    size_t size = ort_value.GetTensorTypeAndShapeInfo().GetElementCount();
     const float* data_ptr = ort_value.GetTensorData<float>();
     tb.data.assign(data_ptr, data_ptr + size);
-
     return tb;
 }
 

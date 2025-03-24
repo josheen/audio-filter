@@ -11,6 +11,8 @@ include_directories(
     ${PROJECT_SOURCE_DIR}/src/fftw/include
     ${PROJECT_SOURCE_DIR}/src/onnx/include
     ${PROJECT_SOURCE_DIR}/third_party/eigen
+    ${PROJECT_SOURCE_DIR}/third_party/portaudio
+    ${PROJECT_SOURCE_DIR}/third_party/libsndfile/include
 )
 
 set(FFTW_ROOT ${PROJECT_SOURCE_DIR}/src/fftw)
@@ -23,6 +25,7 @@ find_library(FFTW_LIB fftw3f PATHS ${FFTW_LIBRARY_DIR})
 find_path(FFTW_INCLUDE_DIR fftw3.h PATHS ${FFTW_INCLUDE_DIR})
 
 find_library(ONNX_LIB onnxruntime PATHS ${ONNX_LIBRARY_DIR})
+add_subdirectory(third_party/portaudio external/libsndfile)
 
 add_executable(AudioFilter src/main.cpp)
 
@@ -36,7 +39,21 @@ add_library(runtime_params src/RuntimeParams.cpp)
 
 target_link_libraries(dfstate ${FFTW_LIB})
 
-target_link_libraries(AudioFilter fftwc2r fftwr2c ${FFTW_LIB} ${ONNX_LIB})
+target_link_libraries(AudioFilter
+    fftwc2r
+    fftwr2c
+    dfnetwork
+    dfstate
+    dfparams
+    runtime_params
+    ${FFTW_LIB}
+    ${ONNX_LIB}
+    portaudio
+    ${PROJECT_SOURCE_DIR}/src/lib/libsndfile.dylib
+)
+target_compile_definitions(AudioFilter PRIVATE
+    MODEL_PATH="${CMAKE_SOURCE_DIR}/dfn3_onnx/export"
+)
 
 ADD_CUSTOM_TARGET(link_target ALL COMMAND ${CMAKE_COMMAND} -E create_symlink
     compile_commands.json ${PROJECT_SOURCE_DIR}/compile_commands.json)
