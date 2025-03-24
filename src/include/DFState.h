@@ -4,6 +4,7 @@
 #include <vector>
 #include <complex>
 #include "RealToComplex.h"
+#include <Eigen/Dense>
 #include "ComplexToReal.h"
 
 template <typename T>
@@ -38,11 +39,16 @@ class DFState {
         void init_mean_norm_state();
         void init_unit_norm_state(size_t nb_freqs);
         void analysis(const float* input, std::complex<float>* output);
+        void feat_erb(const Eigen::Map<const Eigen::ArrayXcf>& input, float alpha, Eigen::Map<Eigen::ArrayXf>& output);
+        void feat_cplx(const Eigen::Ref<const Eigen::ArrayXcf>& input, float alpha, Eigen::Map<Eigen::ArrayXcf>& output);
         void frame_analysis(const float* input, std::complex<float>* output, DFState& state);
+        void synthesis(std::complex<float>* input, float* output);
+        void apply_mask(Eigen::Ref<Eigen::ArrayXcf> spec, const Eigen::ArrayXf& gains);
         std::vector<float> mean_norm_state_;
         std::vector<float> unit_norm_state_;
 
     private:
+        void apply_interp_band_gain(Eigen::Ref<Eigen::ArrayXcf>& out, const Eigen::ArrayXf& band_e, const std::vector<size_t>& erb_fb);
         size_t sr_;
         size_t frame_size_;
         size_t window_size_;

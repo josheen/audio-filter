@@ -2,6 +2,11 @@
 #include <string>
 #include <stdexcept>
 #include <iostream>
+#include <utility>
+
+TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t n_ch, size_t nb_df);
+TensorBuffer OrtValueToTensorBuffer(const Ort::Value& ort_value);
+void post_filter(const std::complex<float>* noisy, std::complex<float>* enh, size_t length, float beta);
 
 float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& enhanced_frame) {
     assert(noisy_frame.rows() == ch_);
@@ -43,20 +48,189 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
         return 35.0f;
     }
 
-    float lsnr = 0.0f;
-    Eigen::MatrixXf gains;
-    Eigen::MatrixXf coefs;
-    //lsnr, gains, coefs = process_raw();
+    auto [lsnr, gains, coefs] = process_raw();
+    auto [apply_erb, gains_ignore, coefs_ignore] = apply_stages(lsnr);
+    auto& spec_frame = rolling_spec_buf_y_[df_order_ - 1];
+    Eigen::Map<Eigen::ArrayXcf> spec_map(
+            reinterpret_cast<std::complex<float>*>(spec_frame.data.data()), 
+            ch_ * n_freqs_);
+    if (gains.has_value()) {
+        Eigen::Map<const Eigen::MatrixXf> gains_map(gains->data.data(), gains->shape[0], gains->shape[1]);
 
-    for (size_t ch = 0; ch < ch_; ++ch) {
-        auto& state = df_states_[ch];
-        Eigen::Map<Eigen::Matrix<std::complex<float>, Eigen::Dynamic, 1>> spec(
-            reinterpret_cast<std::complex<float>*>(spec_buf_.data.data()) + ch * n_freqs_, n_freqs_);
-        //state.synthesis(spec, enhanced_frame.row(ch).data());
+        if (gains->shape[0] < ch_) {
+            // Single-channel gain vector, apply to each channel
+            for (size_t ch = 0; ch < ch_; ch++) {
+                Eigen::Map<Eigen::ArrayXcf> spec_ch_map(
+                        spec_frame.data.data() + ch * n_freqs_,
+                        n_freqs_
+                        );
+                df_states_[0].apply_mask(spec_ch_map, gains_map.row(0));
+            }
+        } else {
+            // Channel-specific gains
+            for (size_t ch = 0; ch < ch_; ch++) {
+                Eigen::Map<Eigen::ArrayXcf> spec_ch_map(
+                        spec_frame.data.data() + ch * n_freqs_,
+                        n_freqs_
+                        );
+                df_states_[ch].apply_mask(spec_ch_map, gains_map.row(ch));
+            }
+        }
+        skip_counter_ = 0;
+    } else {
+        skip_counter_++;
     }
+    spec_buf_.data = spec_frame.data;
+    // Apply second-stage DF filtering if coefficients present
+    if (coefs.has_value()) {
+        df(
+                rolling_spec_buf_x_,
+                *coefs,
+                nb_df_,
+                df_order_,
+                n_freqs_,
+                spec_buf_
+          );
 
+        // Get noisy spectrum snapshot for mixing
+        const auto& spec_noisy_frame = rolling_spec_buf_x_[
+            std::max(lookahead_, df_order_) - lookahead_ - 1
+        ];
+        Eigen::Map<const Eigen::ArrayXcf> spec_noisy_map(
+                reinterpret_cast<const std::complex<float>*>(spec_noisy_frame.data.data()),
+                ch_ * n_freqs_
+                );
+
+        // Current enhanced spectrum to work on
+        Eigen::Map<Eigen::ArrayXcf> spec_enh_map(
+                reinterpret_cast<std::complex<float>*>(spec_buf_.data.data()),
+                ch_ * n_freqs_
+                );
+
+        // Run post filter if enabled
+        if (apply_erb && post_filter_) {
+            post_filter(
+                    spec_noisy_map.data(),
+                    spec_enh_map.data(),
+                    ch_ * n_freqs_,
+                    post_filter_beta_
+                    );
+        }
+
+        // Apply attenuation limit if needed
+        if (atten_lim_.has_value()) {
+            float lim = atten_lim_.value();
+            spec_enh_map = spec_enh_map * (1.0f - lim) + spec_noisy_map * lim;
+        }
+
+        // Run synthesis step per channel (IFFT)
+        for (size_t ch = 0; ch < ch_; ch++) {
+            auto spec_ch_data = spec_enh_map.segment(ch * n_freqs_, n_freqs_).data();
+            float* enh_out_ch = enhanced_frame.row(ch).data();
+            df_states_[ch].synthesis(spec_ch_data, enh_out_ch);
+        }
+    }
     return lsnr;
 }
+
+
+std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNetwork::process_raw() {
+    for (size_t ch = 0; ch < ch_; ch++) {
+        Eigen::Map<const Eigen::ArrayXcf> nsy_ch(spec_buf_.data.data() + ch * n_freqs_, n_freqs_);
+        Eigen::Map<Eigen::ArrayXf> erb_ch(erb_buf_.data.data() + ch * nb_erb_, nb_erb_);
+        Eigen::Map<Eigen::ArrayXcf> cplx_ch(cplx_buf_.data.data() + ch * nb_df_, nb_df_);
+
+        df_states_[ch].feat_erb(nsy_ch, alpha_, erb_ch);
+        df_states_[ch].feat_cplx(nsy_ch.head(nb_df_), alpha_, cplx_ch);
+    }
+    auto cplx_permuted_data = permute_cplx_buf(cplx_buf_, ch_, nb_df_);
+    std::vector<int64_t> cplx_permuted_shape = {static_cast<int64_t>(ch_), 2, 1, static_cast<int64_t>(nb_df_)};
+    // Create Ort::Value for permuted cplx_buf
+    Ort::AllocatorWithDefaultOptions allocator;
+    Ort::Value cplx_tensor = Ort::Value::CreateTensor<float>(
+            mem_info_,
+            cplx_permuted_data.data.data(),
+            cplx_permuted_data.data.size(),
+            cplx_permuted_data.shape.data(),
+            cplx_permuted_data.shape.size()
+            );
+
+    Ort::Value erb_tensor = Ort::Value::CreateTensor<float>(
+            mem_info_,                                           // CPU memory info
+            erb_buf_.data.data(),                                // pointer to the erb_buf_ data
+            erb_buf_.data.size(),                                // total number of elements
+            erb_buf_.shape.data(),                               // pointer to erb_buf_ shape array
+            erb_buf_.shape.size()                                // number of dimensions
+            );
+
+    std::array<Ort::Value, 2> encoder_inputs = {std::move(erb_tensor), std::move(cplx_tensor)};
+    // Run encoder inference
+    auto encoder_outputs = enc_session_.Run(
+            Ort::RunOptions{nullptr},
+            encoder_input_names_.data(),
+            encoder_inputs.data(),
+            encoder_inputs.size(),
+            encoder_output_names_.data(),
+            encoder_output_names_.size()
+            );
+
+    Ort::Value e0_tensor = std::move(encoder_outputs[0]);
+    Ort::Value e1_tensor = std::move(encoder_outputs[1]);
+    Ort::Value e2_tensor = std::move(encoder_outputs[2]);
+    Ort::Value e3_tensor = std::move(encoder_outputs[3]);
+    Ort::Value emb_tensor = std::move(encoder_outputs[4]);
+    Ort::Value c0_tensor = std::move(encoder_outputs[5]);
+    Ort::Value lsnr_tensor = std::move(encoder_outputs[6]);
+    float lsnr = *(lsnr_tensor.GetTensorData<float>());
+    auto [apply_gains, apply_gain_zeros, apply_df] = apply_stages(lsnr);
+    // std::cout << "Enhancing frame with lsnr " << lsnr
+    //       << " dB. Applying stage 1: " << apply_gains
+    //       << " and stage 2: " << apply_df << std::endl;
+    std::optional<TensorBuffer> m;
+    if (apply_gains) {
+        std::array<Ort::Value, 5> erb_inputs = {
+            std::move(emb_tensor),
+            std::move(e3_tensor),
+            std::move(e2_tensor),
+            std::move(e1_tensor),
+            std::move(e0_tensor)
+        };
+
+        auto erb_output = erb_dec_session_.Run(Ort::RunOptions{nullptr},
+                erb_input_names_.data(),
+                erb_inputs.data(),
+                erb_inputs.size(),
+                erb_dec_output_names_.data(),
+                1);
+
+        // Remove unnecessary axes (this part you may handle by just taking the correct shape)
+        m = OrtValueToTensorBuffer(erb_output.front());
+    } else if (apply_gain_zeros) {
+        m = TensorBuffer();
+        m->data = std::vector<float>(ch_ * nb_erb_, 0.0f);
+        m->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
+    } else {
+        m = std::nullopt;
+    }
+    std::optional<TensorBuffer> coefs;
+    if (apply_df) {
+        std::array<Ort::Value, 2> df_inputs = {
+            std::move(emb_tensor),
+            std::move(c0_tensor)
+        };
+
+        auto df_output = df_dec_session_.Run(Ort::RunOptions{nullptr},
+                df_dec_input_names_.data(),
+                df_inputs.data(),
+                df_inputs.size(),
+                df_dec_output_names_.data(),
+                1);
+        coefs = OrtValueToTensorBuffer(df_output.front());
+        coefs->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_df_), static_cast<int64_t>(df_order_), 2};
+    }
+    return {lsnr, m, coefs};
+}
+
 DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options)
     : enc_session_(env, df_params.enc_.data(), df_params.enc_.size(), session_options),
     erb_dec_session_(env, df_params.erb_dec_.data(), df_params.erb_dec_.size(), session_options),
@@ -144,9 +318,9 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
         // Store runtime params
         post_filter_ = rp.post_filter_;
         post_filter_beta_ = rp.post_filter_beta_;
-        min_db_thresh = rp.min_db_thresh_;
-        max_db_erb_thresh = rp.max_db_erb_thresh_;
-        max_db_df_thresh = rp.max_db_df_thresh_;
+        min_db_thresh_ = rp.min_db_thresh_;
+        max_db_erb_thresh_ = rp.max_db_erb_thresh_;
+        max_db_df_thresh_ = rp.max_db_df_thresh_;
         reduce_mask_ = rp.reduce_mask_;
         skip_counter_ = 0;
         init();
@@ -190,3 +364,119 @@ void DFNetwork::init() {
     std::cout << "DFNetwork::init() completed.\n";
 }
 
+TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t n_ch, size_t nb_df) {
+    TensorBuffer result;
+    result.shape = {static_cast<int64_t>(n_ch), 2, 1, static_cast<int64_t>(nb_df)};
+    result.data.resize(n_ch * 2 * 1 * nb_df);
+
+    for (size_t ch = 0; ch < n_ch; ch++) {
+        for (size_t bin = 0; bin < nb_df; bin++) {
+            size_t input_idx = ch * nb_df + bin;
+            const auto& val = cplx_buf.data[input_idx];
+
+            // real part
+            size_t real_idx = ch * 2 * nb_df + 0 * nb_df + bin;
+            result.data[real_idx] = val.real();
+
+            // imag part
+            size_t imag_idx = ch * 2 * nb_df + 1 * nb_df + bin;
+            result.data[imag_idx] = val.imag();
+        }
+    }
+
+    return result;
+}
+
+std::tuple<bool, bool, bool> DFNetwork::apply_stages(float lsnr) const {
+    if (lsnr < min_db_thresh_) {
+        // Only noise detected, apply zero mask
+        return {false, true, false};
+    } else if (lsnr > max_db_erb_thresh_) {
+        // Clean signal, no processing
+        return {false, false, false};
+    } else if (lsnr > max_db_df_thresh_) {
+        // Mild noise, only apply stage 1 (erb)
+        return {true, false, false};
+    } else {
+        // Noisy signal, apply stage 1 and 2
+        return {true, false, true};
+    }
+}
+
+TensorBuffer OrtValueToTensorBuffer(const Ort::Value& ort_value) {
+    TensorBuffer tb;
+    auto shape_info = ort_value.GetTensorTypeAndShapeInfo();
+    auto shape = shape_info.GetShape();
+    tb.shape = shape;
+
+    size_t size = shape_info.GetElementCount();
+    const float* data_ptr = ort_value.GetTensorData<float>();
+    tb.data.assign(data_ptr, data_ptr + size);
+
+    return tb;
+}
+
+void DFNetwork::df(const std::deque<TensorComplex>& spec,
+        const TensorBuffer& coefs,
+        size_t nb_df,
+        size_t df_order,
+        size_t n_freqs,
+        TensorComplex& spec_out)
+{
+    // Map the output tensor as an Eigen matrix
+    Eigen::Map<Eigen::MatrixXcf> o_f(spec_out.data.data(), ch_, n_freqs);
+    // Zero out the first nb_df frequency bins
+    o_f.leftCols(nb_df).setZero();
+
+    // Sanity checks (optional)
+    assert(coefs.shape.size() == 4);
+    assert(coefs.shape[0] == ch_);
+    assert(coefs.shape[1] == nb_df);
+    assert(coefs.shape[2] == df_order);
+    assert(coefs.shape[3] == 2);
+
+    // Iterate over the spec frames and coefficients
+    for (size_t t = 0; t < df_order; ++t) {
+        const auto& spec_frame = spec.at(t);
+        Eigen::Map<const Eigen::MatrixXcf> spec_map(spec_frame.data.data(), ch_, n_freqs);
+
+        for (size_t c = 0; c < ch_; ++c) {
+            for (size_t f = 0; f < nb_df; ++f) {
+                // Index calculation: [c, f, t, 0] and [c, f, t, 1]
+                size_t idx = (((c * nb_df + f) * df_order) + t) * 2;
+                std::complex<float> coef_complex(
+                    coefs.data[idx],
+                    coefs.data[idx + 1]
+                );
+
+                // Accumulate filtered output
+                o_f(c, f) += spec_map(c, f) * coef_complex;
+            }
+        }
+    }
+}
+
+void post_filter(const std::complex<float>* noisy, std::complex<float>* enh, size_t length, float beta) {
+    const float eps = 1e-12f;
+    const float pi = static_cast<float>(M_PI);
+    const float beta_p1 = beta + 1.0f;
+
+    for (size_t i = 0; i < length; i += 4) {
+        float g[4], g_sin[4], pf[4];
+
+        for (int j = 0; j < 4; ++j) {
+            g[j] = std::abs(enh[i + j]) / (std::abs(noisy[i + j]) + eps);
+            g[j] = std::clamp(g[j], eps, 1.0f);
+        }
+
+        for (int j = 0; j < 4; ++j) {
+            g_sin[j] = g[j] * std::sin(g[j] * pi * 0.5f);
+            float denom = 1.0f + beta * std::pow(g[j] / (g_sin[j] + eps), 2);
+            pf[j] = (beta_p1 * g[j] / denom) / g[j];
+        }
+
+        for (int j = 0; j < 4; ++j) {
+            enh[i + j] *= pf[j];
+        }
+    }
+}

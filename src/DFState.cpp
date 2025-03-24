@@ -6,6 +6,24 @@
 #include "FFTWRealToComplex.h"
 #include "FFTWComplexToReal.h"
 
+void compute_band_corr(Eigen::Map<Eigen::ArrayXf>& out, const Eigen::Map<const Eigen::ArrayXcf>& x,
+        const Eigen::Map<const Eigen::ArrayXcf>& p, const std::vector<size_t>& erb_fb);
+void band_mean_norm_erb(Eigen::Map<Eigen::ArrayXf>& xs, std::vector<float>& state, float alpha);
+void band_unit_norm(Eigen::Map<Eigen::ArrayXcf>& xs, std::vector<float>& state, float alpha);
+
+void DFState::feat_erb(const Eigen::Map<const Eigen::ArrayXcf>& input, float alpha, Eigen::Map<Eigen::ArrayXf>& output) {
+    compute_band_corr(output, input, input, erb_);
+    for (auto& o : output) {
+        o = 10.0f * std::log10(o + 1e-10f);
+    }
+    band_mean_norm_erb(output, mean_norm_state_, alpha);
+}
+
+void DFState::feat_cplx(const Eigen::Ref<const Eigen::ArrayXcf>& input, float alpha, Eigen::Map<Eigen::ArrayXcf>& output) {
+    output = input;
+    band_unit_norm(output, unit_norm_state_, alpha);
+}
+
 DFState::DFState(size_t sr, size_t fft_size, size_t hop_size, size_t nb_bands, size_t min_nb_freqs)
     : sr_(sr),
       frame_size_(hop_size),
@@ -120,6 +138,64 @@ void DFState::frame_analysis(const float* input, std::complex<float>* output, DF
     }
 }
 
+void DFState::synthesis(std::complex<float>* input, float* output) {
+    std::vector<float> x(window_size_, 0.0f);
+
+    fft_inverse_->process(input, x.data());
+
+    // Apply synthesis window
+    for (size_t i = 0; i < window_size_; i++) {
+        x[i] *= window_[i];
+    }
+
+    // Split the inverse FFT output
+    auto x_first = x.begin();
+    auto x_second = x.begin() + frame_size_;
+
+    // Overlap-add: Add synthesis memory with first part of output
+    for (size_t i = 0; i < frame_size_; i++) {
+        output[i] = x_first[i] + synthesis_mem_[i];
+    }
+
+    // Rotate synthesis memory if overlap (hop < window_size_/2)
+    size_t split = synthesis_mem_.size() - frame_size_;
+    if (split > 0) {
+        std::rotate(synthesis_mem_.begin(), synthesis_mem_.begin() + frame_size_, synthesis_mem_.end());
+    }
+
+    // Update synthesis_mem_ with the second part of FFT output
+    auto s_first = synthesis_mem_.begin();
+    auto s_second = synthesis_mem_.begin() + split;
+    auto xs_first = x_second;
+    auto xs_second = x_second + split;
+
+    // Add overlap part
+    for (size_t i = 0; i < split; i++) {
+        s_first[i] += xs_first[i];
+    }
+
+    // Replace memory part
+    for (size_t i = 0; i < (window_size_ - frame_size_ - split); i++) {
+        s_second[i] = xs_second[i];
+    }
+}
+
+
+void DFState::apply_mask(Eigen::Ref<Eigen::ArrayXcf> output, const Eigen::ArrayXf& gains) {
+    apply_interp_band_gain(output, gains, erb_);
+}
+void DFState::apply_interp_band_gain(Eigen::Ref<Eigen::ArrayXcf>& out, const Eigen::ArrayXf& band_gains, const std::vector<size_t>& erb_fb) {
+    size_t offset = 0;
+    for (size_t i = 0; i < erb_fb.size(); i++) {
+        float gain = band_gains(i);
+        size_t band_size = erb_fb[i];
+        for (size_t j = 0; j < band_size; j++) {
+            out(offset + j) *= gain;
+        }
+        offset += band_size;
+    }
+}
+
 std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t min_nb_freqs) {
     size_t nyq_freq = sr / 2;
     float freq_width = static_cast<float>(sr) / static_cast<float>(fft_size);
@@ -152,4 +228,50 @@ std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t mi
         erb[nb_bands - 1] -= too_large;
     }
     return erb;
+}
+
+
+void compute_band_corr(Eigen::Map<Eigen::ArrayXf>& out, const Eigen::Map<const Eigen::ArrayXcf>& x,
+        const Eigen::Map<const Eigen::ArrayXcf>& p, const std::vector<size_t>& erb_fb) {
+    std::fill(out.begin(), out.end(), 0.0f);
+
+    // Ensure erb_fb and out have the same size
+    assert(erb_fb.size() == out.size());
+
+    size_t bcsum = 0; // Cumulative index for bands
+    for (size_t i = 0; i < erb_fb.size(); ++i) {
+        size_t band_size = erb_fb[i]; // Size of the current band
+        float k = 1.0f / static_cast<float>(band_size); // Normalization factor
+
+        // Compute the correlation for the current band
+        for (size_t j = 0; j < band_size; ++j) {
+            size_t idx = bcsum + j; // Index into x and p
+            out[i] += (x[idx].real() * p[idx].real() + x[idx].imag() * p[idx].imag()) * k;
+        }
+
+        bcsum += band_size; // Update cumulative index
+    }
+}
+void band_mean_norm_erb(Eigen::Map<Eigen::ArrayXf>& xs, std::vector<float>& state, float alpha) {
+    // Ensure xs and state have the same size
+    assert(xs.size() == state.size());
+
+    // Apply exponential mean normalization
+    for (size_t i = 0; i < xs.size(); ++i) {
+        // Update the state with the exponential moving average
+        state[i] = xs[i] * (1.0f - alpha) + state[i] * alpha;
+
+        // Normalize the input value
+        xs[i] -= state[i];
+        xs[i] /= 40.0f;
+    }
+}
+
+
+void band_unit_norm(Eigen::Map<Eigen::ArrayXcf>& xs, std::vector<float>& state, float alpha) {
+    assert(xs.size() == state.size());
+    for (size_t i = 0; i < xs.size(); ++i) {
+        state[i] = std::abs(xs[i]) * (1.0f - alpha) + state[i] * alpha;
+        xs[i] /= std::sqrt(state[i]);
+    }
 }

@@ -33,6 +33,8 @@ class DFNetwork {
     public:
         DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::Env& env, Ort::SessionOptions& session_options);
         float process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& enhanced_frame);
+        std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> process_raw();
+        std::tuple<bool, bool, bool> apply_stages(float lsnr) const;
         void init();
         std::deque<TensorComplex> rolling_spec_buf_y_;
         std::deque<TensorComplex> rolling_spec_buf_x_;
@@ -47,7 +49,7 @@ class DFNetwork {
         Ort::Session df_dec_session_;
         // Buffers:
         TensorBuffer erb_buf_;
-        TensorBuffer cplx_buf_;
+        TensorComplex cplx_buf_;
         std::vector<float> m_zeros_;
         size_t sr_;
         size_t fft_size_;
@@ -69,17 +71,34 @@ class DFNetwork {
             }
             return a;
         }
+        void df(
+                const std::deque<TensorComplex>& spec_frames,
+                const TensorBuffer& coefs,
+                size_t nb_df,
+                size_t df_order,
+                size_t n_freqs,
+                TensorComplex& spec_out
+               );
         size_t df_lookahead;
         size_t min_nb_erb_freqs_;
         float alpha_;
-        float min_db_thresh;
-        float max_db_erb_thresh;
-        float max_db_df_thresh;
+        float min_db_thresh_;
+        float max_db_erb_thresh_;
+        float max_db_df_thresh_;
         ReduceMask reduce_mask_;
         std::optional<float> atten_lim_;
         bool post_filter_;
         float post_filter_beta_;
         size_t skip_counter_;
+        // Encoder I/O names
+        const std::array<const char*, 2> encoder_input_names_ = {"feat_erb", "feat_spec"};
+        const std::array<const char*, 7> encoder_output_names_ = {"e0", "e1", "e2", "e3", "emb", "c0", "lsnr"};
+        // ERB decoder I/O names
+        const std::array<const char*, 5> erb_input_names_ = {"emb", "e3", "e2", "e1", "e0"};
+        const std::array<const char*, 1> erb_dec_output_names_ = {"m"};
+        // DF decoder I/O names
+        const std::array<const char*, 2> df_dec_input_names_ = {"emb", "c0"};
+        const std::array<const char*, 1> df_dec_output_names_ = {"coefs"};
 };
 
 #endif
