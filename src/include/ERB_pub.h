@@ -7,7 +7,7 @@
 std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t min_nb_freqs);
 
 inline float freq2erb(float freq_hz) {
-    return 9.265f * std::log1p(freq_hz / (24.7f * 9.625f));
+    return 9.265f * std::log1p(freq_hz / (24.7f * 9.265f));
 }
 
 inline float erb2freq(float n_erb) {

@@ -10,11 +10,13 @@
 #define CHANNELS 1
 
 struct RecorderData {
-    std::vector<float> inputBuffer;
-    size_t hopSize;
-    std::atomic<bool> running{true};
-    DFNetwork* df;
+    std::vector<float> inputRingBuffer;
     std::vector<float> outputBuffer;
+    std::mutex bufferMutex;
+    std::mutex outputMutex;
+    size_t hopSize;
+    DFNetwork* df;
+    std::atomic<bool> running{true};
 };
 
 const std::string MODEL_DIR = MODEL_PATH;
@@ -24,29 +26,48 @@ const std::string DF_DEC_MODEL_PATH = MODEL_DIR + "/df_dec.onnx";
 const std::string CONFIG_PATH = MODEL_DIR + "/config.ini";
 
 static int recordCallback(const void* input, void* output,
-                          unsigned long frameCount,
-                          const PaStreamCallbackTimeInfo* timeInfo,
-                          PaStreamCallbackFlags statusFlags,
-                          void* userData) {
+        unsigned long frameCount,
+        const PaStreamCallbackTimeInfo* timeInfo,
+        PaStreamCallbackFlags statusFlags,
+        void* userData) {
     auto* data = static_cast<RecorderData*>(userData);
     const float* in = static_cast<const float*>(input);
-    for (unsigned long i = 0; i < frameCount; i++) {
-        data->inputBuffer.push_back(in[i]);
-        if (data->inputBuffer.size() >= data->hopSize) {
+
+    // Lock-free ring buffer approach (real-time safe)
+    {
+        std::lock_guard<std::mutex> lock(data->bufferMutex);
+
+        // Store incoming samples
+        for (unsigned long i = 0; i < frameCount; i++) {
+            data->inputRingBuffer.push_back(in[i]);
+        }
+
+        // Process complete frames
+        while (data->inputRingBuffer.size() >= data->hopSize) {
+            // Prepare input matrix
             Eigen::MatrixXf noisy(1, data->hopSize);
-            for (size_t j = 0; j < data->hopSize; j++)
-                noisy(0, j) = data->inputBuffer[j];
+            for (size_t j = 0; j < data->hopSize; j++) {
+                noisy(0, j) = data->inputRingBuffer[j];
+            }
 
-            data->inputBuffer.erase(data->inputBuffer.begin(),
-                                    data->inputBuffer.begin() + data->hopSize);
-
+            // Process frame
             Eigen::MatrixXf enhanced(1, data->hopSize);
             data->df->process(noisy, enhanced);
 
-            for (size_t j = 0; j < data->hopSize; j++)
-                data->outputBuffer.push_back(enhanced(0, j));
+            // Store output
+            {
+                std::lock_guard<std::mutex> outLock(data->outputMutex);
+                for (size_t j = 0; j < data->hopSize; j++) {
+                    data->outputBuffer.push_back(enhanced(0, j));
+                }
+            }
+
+            // Remove processed samples
+            data->inputRingBuffer.erase(data->inputRingBuffer.begin(),
+                    data->inputRingBuffer.begin() + data->hopSize);
         }
     }
+
     return data->running ? paContinue : paComplete;
 }
 
@@ -67,7 +88,7 @@ int main() {
     Pa_Initialize();
     PaStream* stream;
     Pa_OpenDefaultStream(&stream, CHANNELS, 0, paFloat32, SAMPLE_RATE,
-                         recData.hopSize, recordCallback, &recData);
+            recData.hopSize, recordCallback, &recData);
 
     std::cout << "Recording... Press enter to stop." << std::endl;
     Pa_StartStream(stream);
@@ -91,7 +112,7 @@ int main() {
         return 1;
     }
     sf_writef_float(outfile, recData.outputBuffer.data(),
-                    recData.outputBuffer.size());
+            recData.outputBuffer.size());
     sf_close(outfile);
 
     std::cout << "Wrote enhanced_output.wav!" << std::endl;

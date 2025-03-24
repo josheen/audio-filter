@@ -51,36 +51,31 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
     auto [lsnr, gains, coefs] = process_raw();
     auto [apply_erb, gains_ignore, coefs_ignore] = apply_stages(lsnr);
     auto& spec_frame = rolling_spec_buf_y_[df_order_ - 1];
-    Eigen::Map<Eigen::ArrayXcf> spec_map(
-            reinterpret_cast<std::complex<float>*>(spec_frame.data.data()), 
-            ch_ * n_freqs_);
     if (gains.has_value()) {
-        Eigen::Map<const Eigen::MatrixXf> gains_map(gains->data.data(), gains->shape[0], gains->shape[1]);
-
-        if (gains->shape[0] < ch_) {
-            // Single-channel gain vector, apply to each channel
-            for (size_t ch = 0; ch < ch_; ch++) {
-                Eigen::Map<Eigen::ArrayXcf> spec_ch_map(
-                        spec_frame.data.data() + ch * n_freqs_,
-                        n_freqs_
-                        );
-                df_states_[0].apply_mask(spec_ch_map, gains_map.row(0));
-            }
+        Eigen::Map<const Eigen::MatrixXf> gains_map(
+                gains->data.data(),
+                ch_,
+                nb_erb_);
+        if (gains_map.rows() < ch_) {
+            // single channel
+            df_states_[0].apply_mask(
+                    Eigen::Map<Eigen::ArrayXcf>(spec_frame.data.data(), n_freqs_),
+                    gains_map.row(0)
+                    );
         } else {
-            // Channel-specific gains
+            // multi-channel
             for (size_t ch = 0; ch < ch_; ch++) {
-                Eigen::Map<Eigen::ArrayXcf> spec_ch_map(
-                        spec_frame.data.data() + ch * n_freqs_,
-                        n_freqs_
+                df_states_[ch].apply_mask(
+                        Eigen::Map<Eigen::ArrayXcf>(spec_frame.data.data() + ch * n_freqs_, n_freqs_),
+                        gains_map.row(ch)
                         );
-
-                df_states_[ch].apply_mask(spec_ch_map, gains_map.row(ch));
             }
         }
         skip_counter_ = 0;
     } else {
         skip_counter_++;
     }
+
     spec_buf_.data = spec_frame.data;
     // Apply second-stage DF filtering if coefficients present
     if (coefs.has_value()) {
@@ -92,7 +87,6 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
                 n_freqs_,
                 spec_buf_
           );
-
         // Get noisy spectrum snapshot for mixing
         const auto& spec_noisy_frame = rolling_spec_buf_x_[
             std::max(lookahead_, df_order_) - lookahead_ - 1
@@ -187,18 +181,12 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
     auto emb_shape = emb_tensor_info.GetShape();
     size_t emb_num_elements = emb_tensor_info.GetElementCount();
 
-    // Assuming float tensor:
-    const float* emb_src_data = emb_tensor.GetTensorData<float>();
-
-    // Copy the data into a vector:
-    std::vector<float> emb_data_copy(emb_src_data, emb_src_data + emb_num_elements);
-
     // Create a clone tensor from the copied data:
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeDefault);
     Ort::Value emb_tensor_clone = Ort::Value::CreateTensor<float>(
             memory_info,
-            emb_data_copy.data(),
-            emb_data_copy.size(),
+            const_cast<float*>(emb_tensor.GetTensorData<float>()),
+            emb_num_elements,
             emb_shape.data(),
             emb_shape.size()
             );
@@ -250,9 +238,8 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
                 df_dec_output_names_.data(),
                 1);
         auto df_tensor_info = df_output.front().GetTensorTypeAndShapeInfo();
-        auto df_shape = df_tensor_info.GetShape();
         coefs = OrtValueToTensorBuffer(df_output.front());
-        coefs->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_df_), static_cast<int64_t>(df_order_), 2};
+        coefs->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_df_), static_cast<int64_t>(df_order_), 2};;
     }
     return {lsnr, m, coefs};
 }
@@ -390,6 +377,24 @@ void DFNetwork::init() {
     std::cout << "DFNetwork::init() completed.\n";
 }
 
+// [
+//  Channel 0
+//  [ [[Re0, Im0], [Re1, Im1], [Re2, Im2]] ],  // Shape [1, 3, 2]
+//  Channel 1
+//  [ [[Re3, Im3], [Re4, Im4], [Re5, Im5]] ]
+// ]
+// [
+//  // Channel 0
+//  [
+//    [ [Re0, Re1, Re2] ],   // All real parts
+//    [ [Im0, Im1, Im2] ]    // All imaginary parts
+//  ],
+//  // Channel 1
+//  [
+//    [ [Re3, Re4, Re5] ],
+//    [ [Im3, Im4, Im5] ]
+//  ]
+//]
 TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t n_ch, size_t nb_df) {
     TensorBuffer result;
     result.shape = {static_cast<int64_t>(n_ch), 2, 1, static_cast<int64_t>(nb_df)};
@@ -409,7 +414,6 @@ TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t n_ch, size_t
             result.data[imag_idx] = val.imag();
         }
     }
-
     return result;
 }
 
@@ -437,7 +441,8 @@ TensorBuffer OrtValueToTensorBuffer(const Ort::Value& ort_value) {
     return tb;
 }
 
-void DFNetwork::df(const std::deque<TensorComplex>& spec,
+void DFNetwork::df(
+        const std::deque<TensorComplex>& spec,
         const TensorBuffer& coefs,
         size_t nb_df,
         size_t df_order,
@@ -449,7 +454,6 @@ void DFNetwork::df(const std::deque<TensorComplex>& spec,
     // Zero out the first nb_df frequency bins
     o_f.leftCols(nb_df).setZero();
 
-    // Sanity checks (optional)
     assert(coefs.shape.size() == 4);
     assert(coefs.shape[0] == ch_);
     assert(coefs.shape[1] == nb_df);
@@ -460,16 +464,16 @@ void DFNetwork::df(const std::deque<TensorComplex>& spec,
     for (size_t t = 0; t < df_order; ++t) {
         const auto& spec_frame = spec.at(t);
         Eigen::Map<const Eigen::MatrixXcf> spec_map(spec_frame.data.data(), ch_, n_freqs);
-
         for (size_t c = 0; c < ch_; ++c) {
             for (size_t f = 0; f < nb_df; ++f) {
-                // Index calculation: [c, f, t, 0] and [c, f, t, 1]
+                // Index calculation: [ch, nb_df, df_order, 0] and [ch, nb_df, df_order, 1]
+                // df_order = 5
+                // nb_df = 96
                 size_t idx = (((c * nb_df + f) * df_order) + t) * 2;
                 std::complex<float> coef_complex(
                     coefs.data[idx],
                     coefs.data[idx + 1]
                 );
-
                 // Accumulate filtered output
                 o_f(c, f) += spec_map(c, f) * coef_complex;
             }

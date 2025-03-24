@@ -5,6 +5,7 @@
 #include "RealFFTPlanner.h"
 #include "FFTWRealToComplex.h"
 #include "FFTWComplexToReal.h"
+#include <numeric>
 
 void compute_band_corr(Eigen::Map<Eigen::ArrayXf>& out, const Eigen::Map<const Eigen::ArrayXcf>& x,
         const Eigen::Map<const Eigen::ArrayXcf>& p, const std::vector<size_t>& erb_fb);
@@ -206,7 +207,7 @@ std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t mi
     int prev_freq = 0;
     int freq_over = 0;
 
-    for (int i = 0; i <= min_nb_freqs; i++) {
+    for (int i = 1; i <= min_nb_freqs; i++) {
         float f = erb2freq(erb_low + static_cast<float>(i) * step);
         size_t fb = static_cast<size_t>(std::round(f / freq_width));
         int nb_freqs = static_cast<int>(fb) - prev_freq - freq_over;
@@ -221,8 +222,7 @@ std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t mi
     }
     erb[nb_bands - 1] += 1;
     size_t too_large = 0;
-    size_t sum = 0;
-    for (const auto val : erb) sum += val;
+    size_t sum = std::accumulate(erb.begin(), erb.end(),0U);
     too_large = sum - (fft_size / 2 + 1);
     if (too_large > 0) {
         erb[nb_bands - 1] -= too_large;
