@@ -22,8 +22,8 @@ RuntimeParams::RuntimeParams(
 RuntimeParams RuntimeParams::default_with_ch(size_t channels) {
     return RuntimeParams(
         channels,   // n_ch
-        0.02f,      // post_filter_beta
-        100.f,      // atten_lim_db
+        0.00f,      // post_filter_beta
+        40.f,      // atten_lim_db
         -10.f,      // min_db_thresh
         30.f,       // max_db_erb_thresh
         20.f,       // max_db_df_thresh

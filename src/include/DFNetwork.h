@@ -48,6 +48,9 @@ class DFNetwork {
         Ort::Session erb_dec_session_;
         Ort::Session df_dec_session_;
         // Buffers:
+        std::deque<TensorBuffer> rolling_erb;  // Store past erb feature frames
+        std::deque<TensorBuffer> rolling_cplx; // Store past cplx feature frames
+        std::deque<std::vector<float>> rolling_c0;     // Store old C0 tensors
         TensorBuffer erb_buf_;
         TensorComplex cplx_buf_;
         std::vector<float> m_zeros_;

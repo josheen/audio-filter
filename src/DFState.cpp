@@ -159,6 +159,8 @@ void DFState::synthesis(std::complex<float>* input, float* output) {
     }
 
     // Rotate synthesis memory if overlap (hop < window_size_/2)
+    // size = fft_size - hop_size = 480
+    // frame_size = hop_size = 480
     size_t split = synthesis_mem_.size() - frame_size_;
     if (split > 0) {
         std::rotate(synthesis_mem_.begin(), synthesis_mem_.begin() + frame_size_, synthesis_mem_.end());
@@ -170,12 +172,10 @@ void DFState::synthesis(std::complex<float>* input, float* output) {
     auto xs_first = x_second;
     auto xs_second = x_second + split;
 
-    // Add overlap part
     for (size_t i = 0; i < split; i++) {
         s_first[i] += xs_first[i];
     }
 
-    // Replace memory part
     for (size_t i = 0; i < (window_size_ - frame_size_ - split); i++) {
         s_second[i] = xs_second[i];
     }
