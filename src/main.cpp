@@ -43,7 +43,7 @@ static int recordCallback(const void* input, void* output,
         }
 
         // Process complete frames
-        while (data->inputRingBuffer.size() >= data->hopSize) {
+        while (data->inputRingBuffer.size() >= SAMPLE_RATE*3) {
             // Prepare input matrix
             Eigen::MatrixXf noisy(1, data->hopSize);
             for (size_t j = 0; j < data->hopSize; j++) {

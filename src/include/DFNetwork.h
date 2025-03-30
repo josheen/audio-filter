@@ -61,6 +61,9 @@ class DFNetwork {
         size_t nb_df_;
         size_t lookahead_;
         std::vector<DFState> df_states_;
+        TensorBuffer enc_hidden;
+        TensorBuffer erb_dec_hidden;
+        TensorBuffer df_dec_hidden;
     private:
         float calc_norm_alpha(size_t sr, size_t hop_size, float tau) {
             float dt = static_cast<float>(hop_size) / static_cast<float>(sr);
@@ -94,14 +97,14 @@ class DFNetwork {
         float post_filter_beta_;
         size_t skip_counter_;
         // Encoder I/O names
-        const std::array<const char*, 2> encoder_input_names_ = {"feat_erb", "feat_spec"};
-        const std::array<const char*, 7> encoder_output_names_ = {"e0", "e1", "e2", "e3", "emb", "c0", "lsnr"};
+        const std::array<const char*, 3> encoder_input_names_ = {"feat_erb", "feat_spec", "enc_hidden"};
+        const std::array<const char*, 8> encoder_output_names_ = {"e0", "e1", "e2", "e3", "emb", "c0", "lsnr", "hidden"};
         // ERB decoder I/O names
-        const std::array<const char*, 5> erb_input_names_ = {"emb", "e3", "e2", "e1", "e0"};
-        const std::array<const char*, 1> erb_dec_output_names_ = {"m"};
+        const std::array<const char*, 6> erb_input_names_ = {"emb", "e3", "e2", "e1", "e0", "erb_dec_hidden"};
+        const std::array<const char*, 2> erb_dec_output_names_ = {"m", "hidden"};
         // DF decoder I/O names
-        const std::array<const char*, 2> df_dec_input_names_ = {"emb", "c0"};
-        const std::array<const char*, 1> df_dec_output_names_ = {"coefs"};
+        const std::array<const char*, 3> df_dec_input_names_ = {"emb", "c0", "df_dec_hidden"};
+        const std::array<const char*, 2> df_dec_output_names_ = {"coefs", "hidden"};
 };
 
 #endif

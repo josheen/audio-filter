@@ -12,6 +12,8 @@ TensorBuffer setup_c0_buffer(const std::deque<std::vector<float>>& c0_rolling_bu
 TensorBuffer OrtValueToTensorBuffer(const Ort::Value& ort_value);
 void post_filter(const std::complex<float>* noisy, std::complex<float>* enh, size_t length, float beta);
 
+#define NUM_DF_SAMPLES 5
+
 float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& enhanced_frame) {
     assert(noisy_frame.rows() == ch_);
     assert(noisy_frame.cols() == hop_size_);
@@ -168,8 +170,16 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
             erb_input.shape.data(),                               // pointer to erb_buf_ shape array
             erb_input.shape.size()                                // number of dimensions
             );
+    Ort::Value enc_hidden_tensor = Ort::Value::CreateTensor<float>(
+            mem_info_,
+            enc_hidden.data.data(),
+            enc_hidden.data.size(),
+            enc_hidden.shape.data(),
+            enc_hidden.shape.size()
+            );
 
-    std::array<Ort::Value, 2> encoder_inputs = {std::move(erb_tensor), std::move(cplx_tensor)};
+    std::array<Ort::Value, 3> encoder_inputs = {std::move(erb_tensor),
+        std::move(cplx_tensor), std::move(enc_hidden_tensor)};
     // Run encoder inference
     auto encoder_outputs = enc_session_.Run(
             Ort::RunOptions{nullptr},
@@ -187,6 +197,9 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
     Ort::Value emb_tensor = std::move(encoder_outputs[4]);
     Ort::Value c0_tensor = std::move(encoder_outputs[5]);
     Ort::Value lsnr_tensor = std::move(encoder_outputs[6]);
+    Ort::Value new_enc_hidden_tensor = std::move(encoder_outputs[7]);
+    float* new_enc_hidden_data = new_enc_hidden_tensor.GetTensorMutableData<float>();
+    std::copy(new_enc_hidden_data, new_enc_hidden_data + 256, enc_hidden.data.begin());
 
     auto emb_tensor_info = emb_tensor.GetTensorTypeAndShapeInfo();
     auto emb_shape = emb_tensor_info.GetShape();
@@ -209,12 +222,21 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
     //       << " and stage 2: " << apply_df << std::endl;
     std::optional<TensorBuffer> m;
     if (apply_gains) {
-        std::array<Ort::Value, 5> erb_inputs = {
+    Ort::Value erb_dec_hidden_tensor = Ort::Value::CreateTensor<float>(
+            mem_info_,
+            erb_dec_hidden.data.data(),
+            erb_dec_hidden.data.size(),
+            erb_dec_hidden.shape.data(),
+            erb_dec_hidden.shape.size()
+            );
+
+        std::array<Ort::Value, 6> erb_inputs = {
             std::move(emb_tensor),
             std::move(e3_tensor),
             std::move(e2_tensor),
             std::move(e1_tensor),
-            std::move(e0_tensor)
+            std::move(e0_tensor),
+            std::move(erb_dec_hidden_tensor)
         };
 
         auto erb_output = erb_dec_session_.Run(
@@ -223,11 +245,14 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
                 erb_inputs.data(),
                 erb_inputs.size(),
                 erb_dec_output_names_.data(),
-                1);
+                erb_dec_output_names_.size()
+                );
 
-        // Remove unnecessary axes (this part you may handle by just taking the correct shape)
-        m = OrtValueToTensorBuffer(erb_output.front());
+        m = OrtValueToTensorBuffer(erb_output[0]);
         m->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
+        erb_dec_hidden = OrtValueToTensorBuffer(erb_output[1]);
+        erb_dec_hidden.shape = {2, 1, 256};
+
     } else if (apply_gain_zeros) {
         m = TensorBuffer();
         m->data = std::vector<float>(ch_ * nb_erb_, 0.0f);
@@ -246,10 +271,18 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
                 c0_pulse_tensor.shape.data(),                       // pointer to shape array
                 c0_pulse_tensor.shape.size()                        // number of dimensions
                 );
+        Ort::Value df_dec_hidden_tensor = Ort::Value::CreateTensor<float>(
+                mem_info_,
+                df_dec_hidden.data.data(),
+                df_dec_hidden.data.size(),
+                df_dec_hidden.shape.data(),
+                df_dec_hidden.shape.size()
+                );
 
-        std::array<Ort::Value, 2> df_inputs = {
+        std::array<Ort::Value, 3> df_inputs = {
             std::move(emb_tensor_clone),
-            std::move(c0_pulse)
+            std::move(c0_pulse),
+            std::move(df_dec_hidden_tensor)
         };
 
         auto df_output = df_dec_session_.Run(Ort::RunOptions{nullptr},
@@ -257,10 +290,13 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
                 df_inputs.data(),
                 df_inputs.size(),
                 df_dec_output_names_.data(),
-                1);
+                df_dec_output_names_.size()
+                );
         auto df_tensor_info = df_output.front().GetTensorTypeAndShapeInfo();
-        coefs = OrtValueToTensorBuffer(df_output.front());
+        coefs = OrtValueToTensorBuffer(df_output[0]);
         coefs->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_df_), static_cast<int64_t>(df_order_), 2};;
+        df_dec_hidden = OrtValueToTensorBuffer(df_output[1]);
+        df_dec_hidden.shape = {2, 1, 256};
     }
     return {lsnr, m, coefs};
 }
@@ -321,6 +357,15 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
         cplx_buf_.shape = {static_cast<int64_t>(ch_), 1, static_cast<int64_t>(nb_df_), 2};
         m_zeros_.resize(nb_erb_, 0.0f);
 
+        enc_hidden.data.resize(256, 0.0f);
+        enc_hidden.shape = {1,1,256};
+
+        erb_dec_hidden.data.resize(2 * 256, 0.0f);
+        erb_dec_hidden.shape = {2, 1, 256};
+        
+        df_dec_hidden.data.resize(2 * 256, 0.0f);
+        df_dec_hidden.shape = {2, 1, 256};
+
         // Model type detection
         std::string model_type = df_params.section("train").at("model");
         if (model_type == "deepfilternet3") {
@@ -367,7 +412,7 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
         std::vector<float> empty_c0_buf;
         empty_c0_buf.assign(64 * 96, 0.0f);
         rolling_c0.clear();
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < NUM_DF_SAMPLES; i++) {
             rolling_c0.push_back(empty_c0_buf);
         }
 
@@ -416,7 +461,7 @@ void DFNetwork::init() {
     std::vector<float> empty_c0_buf;
     empty_c0_buf.assign(64 * 96, 0.0f);
     rolling_c0.clear();
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < NUM_DF_SAMPLES; i++) {
         rolling_c0.push_back(empty_c0_buf);
     }
 
@@ -439,6 +484,14 @@ void DFNetwork::init() {
     cplx_buf_.data.assign(ch_ * nb_df_ * 2, 0.0f);
     cplx_buf_.shape = {static_cast<int64_t>(ch_), 1, static_cast<int64_t>(nb_df_), 2};
 
+    enc_hidden.data.resize(256, 0.0f);
+    enc_hidden.shape = {1,1,256};
+
+    erb_dec_hidden.data.resize(2 * 256, 0.0f);
+    erb_dec_hidden.shape = {2, 1, 256};
+
+    df_dec_hidden.data.resize(2 * 256, 0.0f);
+    df_dec_hidden.shape = {2, 1, 256};
     std::cout << "DFNetwork::init() completed.\n";
 }
 
@@ -515,37 +568,22 @@ void update_c0_buffer(Ort::Value& c0_tensor, std::deque<std::vector<float>>& rol
     float* c0_data = c0_tensor.GetTensorMutableData<float>();
     // Convert Ort::Value to std::vector<float>
     std::vector<float> c0_vector(c0_data, c0_data + (64 * 96)); // 1 * 64 * 1 * 96
-    if (rolling_buffer.size() > 5) {
+    if (rolling_buffer.size() >= NUM_DF_SAMPLES) {
         rolling_buffer.pop_front(); 
     }
     rolling_buffer.push_back(c0_vector);
 }
+
 TensorBuffer setup_c0_buffer(const std::deque<std::vector<float>>& c0_rolling_buffer) {
     TensorBuffer result;
-    result.shape = {1, 64, 5, 96};
-    result.data.resize(64 * 5 * 96);
-    // [ 
-    // '01'
-    // [ [t1_96]]
-    // ...
-    // '64'
-    // [ [t1_96] ]
-    // ]
-
-    // 
-    // [ 
-    // '01'
-    // [ [t1_96], [t2_96], [t3_96], [t4_96], [t5_96] ]
-    // ...
-    // '64'
-    // [ [t1_96], [t2_96], [t3_96], [t4_96], [t5_96] ]
-    // ]
-    //
-    for (size_t t = 0; t < 5; t++) { // Iterate over 5 timesteps
+    result.shape = {static_cast<int64_t>(1), static_cast<int64_t>(64),
+        static_cast<int64_t>(NUM_DF_SAMPLES), static_cast<int64_t>(96)};
+    result.data.resize(64 * NUM_DF_SAMPLES * 96);
+    for (size_t t = 0; t < NUM_DF_SAMPLES; t++) {
         const std::vector<float>& timestep_buffer = c0_rolling_buffer[t];
         for (size_t i = 0; i < 64; i++) {
-            size_t dest = (i * 5 * 96) + (t * 96);
-            size_t src_idx = i * 64;
+            size_t dest = (i * NUM_DF_SAMPLES * 96) + (t * 96);
+            size_t src_idx = i * 96;
             std::copy(timestep_buffer.begin() + src_idx,
                     timestep_buffer.begin() + src_idx + 96,
                     result.data.begin() + dest);

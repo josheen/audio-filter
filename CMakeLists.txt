@@ -52,7 +52,7 @@ target_link_libraries(AudioFilter
     ${PROJECT_SOURCE_DIR}/src/lib/libsndfile.dylib
 )
 target_compile_definitions(AudioFilter PRIVATE
-    MODEL_PATH="${CMAKE_SOURCE_DIR}/dfn3_onnx/export"
+    MODEL_PATH="${CMAKE_SOURCE_DIR}/updated_model"
 )
 
 ADD_CUSTOM_TARGET(link_target ALL COMMAND ${CMAKE_COMMAND} -E create_symlink
