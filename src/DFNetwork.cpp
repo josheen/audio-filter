@@ -69,19 +69,18 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
 
     spec_buf_.data = spec_frame.data;
     // Apply second-stage DF filtering if coefficients present
-    if (coefs.has_value()) {
-        df(
-                rolling_spec_buf_x_,
-                *coefs,
-                nb_df_,
-                df_order_,
-                n_freqs_,
-                spec_buf_
-          );
+//    if (coefs.has_value()) {
+//        df(
+//                rolling_spec_buf_x_,
+//                *coefs,
+//                nb_df_,
+//                df_order_,
+//                n_freqs_,
+//                spec_buf_
+//          );
         // Get noisy spectrum snapshot for mixing
         const auto& spec_noisy_frame = rolling_spec_buf_x_[
-            std::max(lookahead_, df_order_) - lookahead_ - 1
-        ];
+            std::max(lookahead_, df_order_) - lookahead_ - 1];
         Eigen::Map<const Eigen::ArrayXcf> spec_noisy_map(
                 reinterpret_cast<const std::complex<float>*>(spec_noisy_frame.data.data()),
                 ch_ * n_freqs_
@@ -110,12 +109,10 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
         }
 
         // Run synthesis step per channel (IFFT)
-        for (size_t ch = 0; ch < ch_; ch++) {
-            auto spec_ch_data = spec_enh_map.segment(ch * n_freqs_, n_freqs_).data();
-            float* enh_out_ch = enhanced_frame.row(ch).data();
-            df_states_[ch].synthesis(spec_ch_data, enh_out_ch);
-        }
-    }
+       auto spec_ch_data = spec_enh_map.data();
+       float* enh_out_ch = enhanced_frame.row(0).data();
+       df_states_[0].synthesis(spec_ch_data, enh_out_ch);
+//    }
     return lsnr;
 }
 
@@ -201,9 +198,6 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
 
     float lsnr = *(lsnr_tensor.GetTensorData<float>());
     auto [apply_gains, apply_gain_zeros, apply_df] = apply_stages(lsnr);
-    std::cout << "Enhancing frame with lsnr " << lsnr
-        << " dB. Applying stage 1: " << apply_gains
-        << " and stage 2: " << apply_df << std::endl;
     std::optional<TensorBuffer> m;
     if (apply_gains) {
     Ort::Value erb_dec_hidden_tensor = Ort::Value::CreateTensor<float>(
