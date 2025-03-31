@@ -4,7 +4,7 @@
 #include <iostream>
 #include <utility>
 
-TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t n_ch, size_t nb_df);
+TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t nb_df);
 TensorBuffer setup_erb_input(const std::deque<TensorBuffer>& erb_rolling_buf, size_t n_ch, size_t nb_erb);
 TensorBuffer setup_cplx_input(const std::deque<TensorBuffer>& cplx_rolling_buf, size_t n_ch, size_t nb_df);
 void update_c0_buffer(Ort::Value& c0_tensor, std::deque<std::vector<float>>& rolling_buffer);
@@ -58,21 +58,10 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
                 gains->data.data(),
                 ch_,
                 nb_erb_);
-        if (gains_map.rows() < ch_) {
-            // single channel
-            df_states_[0].apply_mask(
-                    Eigen::Map<Eigen::ArrayXcf>(spec_frame.data.data(), n_freqs_),
-                    gains_map.row(0)
-                    );
-        } else {
-            // multi-channel
-            for (size_t ch = 0; ch < ch_; ch++) {
-                df_states_[ch].apply_mask(
-                        Eigen::Map<Eigen::ArrayXcf>(spec_frame.data.data() + ch * n_freqs_, n_freqs_),
-                        gains_map.row(ch)
-                        );
-            }
-        }
+        df_states_[0].apply_mask(
+                Eigen::Map<Eigen::ArrayXcf>(spec_frame.data.data(), n_freqs_),
+                gains_map.row(0)
+                );
         skip_counter_ = 0;
     } else {
         skip_counter_++;
@@ -132,19 +121,18 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
 
 
 std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNetwork::process_raw() {
-    for (size_t ch = 0; ch < ch_; ch++) {
-        Eigen::Map<const Eigen::ArrayXcf> nsy_ch(spec_buf_.data.data() + ch * n_freqs_, n_freqs_);
-        Eigen::Map<Eigen::ArrayXf> erb_ch(erb_buf_.data.data() + ch * nb_erb_, nb_erb_);
-        Eigen::Map<Eigen::ArrayXcf> cplx_ch(cplx_buf_.data.data() + ch * nb_df_, nb_df_);
+    Eigen::Map<const Eigen::ArrayXcf> nsy_ch(spec_buf_.data.data(), n_freqs_);
+    Eigen::Map<Eigen::ArrayXf> erb_ch(erb_buf_.data.data(), nb_erb_);
+    Eigen::Map<Eigen::ArrayXcf> cplx_ch(cplx_buf_.data.data(), nb_df_);
 
-        df_states_[ch].feat_erb(nsy_ch, alpha_, erb_ch);
-        df_states_[ch].feat_cplx(nsy_ch.head(nb_df_), alpha_, cplx_ch);
-    }
-    auto cplx_permuted_data = permute_cplx_buf(cplx_buf_, ch_, nb_df_);
+    df_states_[0].feat_erb(nsy_ch, alpha_, erb_ch);
+    df_states_[0].feat_cplx(nsy_ch.head(nb_df_), alpha_, cplx_ch);
+
+    auto cplx_permuted_data = permute_cplx_buf(cplx_buf_, nb_df_);
     std::vector<int64_t> cplx_permuted_shape = {static_cast<int64_t>(ch_), 2, 1, static_cast<int64_t>(nb_df_)};
     rolling_erb.pop_front();
     rolling_cplx.pop_front();
-    rolling_erb.push_back(TensorBuffer(erb_buf_));
+    rolling_erb.push_back(erb_buf_);
     rolling_cplx.push_back(TensorBuffer(cplx_permuted_data));
 
     TensorBuffer erb_input = setup_erb_input(rolling_erb, ch_, nb_erb_);
@@ -213,9 +201,9 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
 
     float lsnr = *(lsnr_tensor.GetTensorData<float>());
     auto [apply_gains, apply_gain_zeros, apply_df] = apply_stages(lsnr);
-    // std::cout << "Enhancing frame with lsnr " << lsnr
-    //       << " dB. Applying stage 1: " << apply_gains
-    //       << " and stage 2: " << apply_df << std::endl;
+    std::cout << "Enhancing frame with lsnr " << lsnr
+        << " dB. Applying stage 1: " << apply_gains
+        << " and stage 2: " << apply_df << std::endl;
     std::optional<TensorBuffer> m;
     if (apply_gains) {
     Ort::Value erb_dec_hidden_tensor = Ort::Value::CreateTensor<float>(
@@ -245,14 +233,13 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
                 );
 
         m = OrtValueToTensorBuffer(erb_output[0]);
-        m->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
+        m->shape = {1, 1, static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
         erb_dec_hidden = OrtValueToTensorBuffer(erb_output[1]);
         erb_dec_hidden.shape = {2, 1, 256};
-
     } else if (apply_gain_zeros) {
         m = TensorBuffer();
         m->data = std::vector<float>(ch_ * nb_erb_, 0.0f);
-        m->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
+        m->shape = {1, 1, static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
     } else {
         m = std::nullopt;
     }
@@ -281,14 +268,14 @@ std::tuple<float, std::optional<TensorBuffer>, std::optional<TensorBuffer>> DFNe
             std::move(df_dec_hidden_tensor)
         };
 
-        auto df_output = df_dec_session_.Run(Ort::RunOptions{nullptr},
+        auto df_output = df_dec_session_.Run(
+                Ort::RunOptions{nullptr},
                 df_dec_input_names_.data(),
                 df_inputs.data(),
                 df_inputs.size(),
                 df_dec_output_names_.data(),
                 df_dec_output_names_.size()
                 );
-        auto df_tensor_info = df_output.front().GetTensorTypeAndShapeInfo();
         coefs = OrtValueToTensorBuffer(df_output[0]);
         coefs->shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_df_), static_cast<int64_t>(df_order_), 2};;
         df_dec_hidden = OrtValueToTensorBuffer(df_output[1]);
@@ -343,7 +330,7 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
             atten_lim_ = std::pow(10.0f, -atten_lim_db / 20.0f);
         }
 
-        spec_buf_.data.resize(n_freqs_ * 2, std::complex<float>(0.0f, 0.0f));
+        spec_buf_.data.resize(n_freqs_, std::complex<float>(0.0f, 0.0f));
         spec_buf_.shape = {1, 1, 1, static_cast<int64_t>(n_freqs_), 2};
 
         erb_buf_.data.resize(ch_ * nb_erb_, 0.0f);
@@ -377,7 +364,7 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
         df_states_.push_back(state);
 
         // Pre-allocate rolling buffers if needed
-        size_t spec_buf_size = ch_ * 1 * 1 * n_freqs_ * 2;
+        size_t spec_buf_size = ch_ * 1 * 1 * n_freqs_;
         TensorComplex empty;
         empty.data.assign(spec_buf_size, std::complex<float>(0.0f, 0.0f));
         empty.shape = {static_cast<int64_t>(ch_), 1, 1, static_cast<int64_t>(n_freqs_), 2};
@@ -395,12 +382,12 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
         empty_erb_buf.shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
         TensorBuffer empty_cplx_buf;
         empty_cplx_buf.data.assign(ch_ * nb_erb_ * 2, 0);
-        empty_erb_buf.shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_) * 2};
+        empty_cplx_buf.shape = {static_cast<int64_t>(ch_), 1, static_cast<int64_t>(nb_erb_), 2};
         rolling_erb.clear();
         rolling_cplx.clear();
         // create rolling erb buffer with lookahead + 1 inputs.
         // For dfn3 this is due to (3,3) kernel
-        for (int i = 0; i < std::max(lookahead_, df_lookahead) + 1; i++) {
+        for (int i = 0; i < lookahead_ + 1; i++) {
             rolling_erb.push_back(empty_erb_buf);
             rolling_cplx.push_back(empty_cplx_buf);
         }
@@ -423,9 +410,9 @@ DFNetwork::DFNetwork(const DFParams& df_params, const RuntimeParams& rp, Ort::En
         init();
     }
 void DFNetwork::init() {
-    size_t spec_buf_size = ch_ * 1 * 1 * n_freqs_ * 2;
     std::cout << "Initializing DFNetwork rolling buffers and state...\n";
 
+    size_t spec_buf_size = ch_ * 1 * 1 * n_freqs_;
     TensorComplex empty;
     empty.data.assign(spec_buf_size, std::complex<float>(0.0f, 0.0f));
     empty.shape = {static_cast<int64_t>(ch_), 1, 1, static_cast<int64_t>(n_freqs_), 2};
@@ -444,12 +431,12 @@ void DFNetwork::init() {
     empty_erb_buf.shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_)};
     TensorBuffer empty_cplx_buf;
     empty_cplx_buf.data.assign(ch_ * nb_erb_ * 2, 0);
-    empty_erb_buf.shape = {static_cast<int64_t>(ch_), static_cast<int64_t>(nb_erb_) * 2};
+    empty_cplx_buf.shape = {static_cast<int64_t>(ch_), 1, static_cast<int64_t>(nb_erb_), 2};
     rolling_erb.clear();
     rolling_cplx.clear();
     // create rolling erb buffer with lookahead + 1 inputs.
     // For dfn3 this is due to (3,3) kernel
-    for (int i = 0; i < std::max(lookahead_, df_lookahead) + 1; i++) {
+    for (int i = 0; i < lookahead_ + 1; i++) {
         rolling_erb.push_back(empty_erb_buf);
         rolling_cplx.push_back(empty_cplx_buf);
     }
@@ -509,24 +496,22 @@ void DFNetwork::init() {
 //    [ [Im3, Im4, Im5] ]
 //  ]
 //]
-TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t n_ch, size_t nb_df) {
+TensorBuffer permute_cplx_buf(const TensorComplex& cplx_buf, size_t nb_df) {
     TensorBuffer result;
-    result.shape = {static_cast<int64_t>(n_ch), 2, 1, static_cast<int64_t>(nb_df)};
-    result.data.resize(n_ch * 2 * 1 * nb_df);
+    result.shape = {1, 2, 1, static_cast<int64_t>(nb_df)};
+    result.data.resize(1 * 2 * 1 * nb_df);
 
-    for (size_t ch = 0; ch < n_ch; ch++) {
-        for (size_t bin = 0; bin < nb_df; bin++) {
-            size_t input_idx = ch * nb_df + bin;
-            const auto& val = cplx_buf.data[input_idx];
+    for (size_t bin = 0; bin < nb_df; bin++) {
+        size_t input_idx = bin;
+        const auto& val = cplx_buf.data[input_idx];
 
-            // real part
-            size_t real_idx = ch * 2 * nb_df + 0 * nb_df + bin;
-            result.data[real_idx] = val.real();
+        // real part
+        size_t real_idx = bin;
+        result.data[real_idx] = val.real();
 
-            // imag part
-            size_t imag_idx = ch * 2 * nb_df + 1 * nb_df + bin;
-            result.data[imag_idx] = val.imag();
-        }
+        // imag part
+        size_t imag_idx = 1 * nb_df + bin;
+        result.data[imag_idx] = val.imag();
     }
     return result;
 }
