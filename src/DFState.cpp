@@ -207,7 +207,7 @@ std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t mi
     int prev_freq = 0;
     int freq_over = 0;
 
-    for (int i = 1; i <= min_nb_freqs; i++) {
+    for (int i = 1; i <= nb_bands; i++) {
         float f = erb2freq(erb_low + static_cast<float>(i) * step);
         size_t fb = static_cast<size_t>(std::round(f / freq_width));
         int nb_freqs = static_cast<int>(fb) - prev_freq - freq_over;
@@ -227,6 +227,7 @@ std::vector<size_t> erb_fb(size_t sr, size_t fft_size,size_t nb_bands, size_t mi
     if (too_large > 0) {
         erb[nb_bands - 1] -= too_large;
     }
+    assert(sum == (fft_size / 2 + 1));
     return erb;
 }
 
@@ -248,7 +249,6 @@ void compute_band_corr(Eigen::Map<Eigen::ArrayXf>& out, const Eigen::Map<const E
             size_t idx = bcsum + j; // Index into x and p
             out[i] += (x[idx].real() * p[idx].real() + x[idx].imag() * p[idx].imag()) * k;
         }
-
         bcsum += band_size; // Update cumulative index
     }
 }

@@ -37,14 +37,10 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
     rolling_spec_buf_y_.pop_front();
     rolling_spec_buf_x_.pop_front();
 
-    for (size_t ch = 0; ch < ch_; ++ch) {
-        // Get the noisy frame for the current channel
-        auto noisy_frame_ch = noisy_frame.row(ch);
-        // Get the spectral buffer for the current channel
-        std::complex<float>* spec_buf_ch = spec_buf_.data.data() + ch * n_freqs_;
-        // Perform analysis
-        df_states_[ch].analysis(noisy_frame_ch.data(), spec_buf_ch);
-    }
+    // Get the noisy frame for the first and only channel
+    auto noisy_frame_ch = noisy_frame.row(0);
+    // Perform analysis
+    df_states_[0].analysis(noisy_frame_ch.data(), spec_buf_.data.data());
 
     rolling_spec_buf_y_.push_back(TensorComplex(spec_buf_));
     rolling_spec_buf_x_.push_back(TensorComplex(spec_buf_));
