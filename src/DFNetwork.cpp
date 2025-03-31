@@ -69,16 +69,16 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
 
     spec_buf_.data = spec_frame.data;
     // Apply second-stage DF filtering if coefficients present
-//    if (coefs.has_value()) {
-//        df(
-//                rolling_spec_buf_x_,
-//                *coefs,
-//                nb_df_,
-//                df_order_,
-//                n_freqs_,
-//                spec_buf_
-//          );
-        // Get noisy spectrum snapshot for mixing
+    if (coefs.has_value()) {
+        df(
+                rolling_spec_buf_x_,
+                *coefs,
+                nb_df_,
+                df_order_,
+                n_freqs_,
+                spec_buf_
+          );
+    }
         const auto& spec_noisy_frame = rolling_spec_buf_x_[
             std::max(lookahead_, df_order_) - lookahead_ - 1];
         Eigen::Map<const Eigen::ArrayXcf> spec_noisy_map(
@@ -112,7 +112,6 @@ float DFNetwork::process(const Eigen::MatrixXf& noisy_frame, Eigen::MatrixXf& en
        auto spec_ch_data = spec_enh_map.data();
        float* enh_out_ch = enhanced_frame.row(0).data();
        df_states_[0].synthesis(spec_ch_data, enh_out_ch);
-//    }
     return lsnr;
 }
 
@@ -614,19 +613,17 @@ void DFNetwork::df(
     for (size_t t = 0; t < df_order; ++t) {
         const auto& spec_frame = spec.at(t);
         Eigen::Map<const Eigen::MatrixXcf> spec_map(spec_frame.data.data(), ch_, n_freqs);
-        for (size_t c = 0; c < ch_; ++c) {
-            for (size_t f = 0; f < nb_df; ++f) {
-                // Index calculation: [ch, nb_df, df_order, 0] and [ch, nb_df, df_order, 1]
-                // df_order = 5
-                // nb_df = 96
-                size_t idx = (((c * nb_df + f) * df_order) + t) * 2;
-                std::complex<float> coef_complex(
+        for (size_t f = 0; f < nb_df; ++f) {
+            // Index calculation: [ch, nb_df, df_order, 0] and [ch, nb_df, df_order, 1]
+            // df_order = 5
+            // nb_df = 96
+            size_t idx = ((f * df_order) + t) * 2;
+            std::complex<float> coef_complex(
                     coefs.data[idx],
                     coefs.data[idx + 1]
-                );
-                // Accumulate filtered output
-                o_f(c, f) += spec_map(c, f) * coef_complex;
-            }
+                    );
+            // Accumulate filtered output
+            o_f(0, f) += spec_map(0, f) * coef_complex;
         }
     }
 }
