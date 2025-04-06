@@ -8,7 +8,6 @@
 template <typename T>
 class FFTWRealToComplex;
 
-// Specialization for float
 template <>
 class FFTWRealToComplex<float> : public RealToComplex<float> {
 public:

@@ -5,11 +5,9 @@
 #include <complex>
 #include <fftw3.h>
 
-// Forward declaration of the template
 template <typename T>
 class FFTWComplexToReal;
 
-// Specialization for float
 template <>
 class FFTWComplexToReal<float> : public ComplexToReal<float> {
 public:

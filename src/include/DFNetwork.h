@@ -12,7 +12,6 @@
 struct TensorBuffer {
     std::vector<float> data;
     std::vector<int64_t> shape;
-    // Default constructor
     TensorBuffer() = default;
     // Copy constructor
     TensorBuffer(const TensorBuffer& other)
@@ -22,7 +21,6 @@ struct TensorBuffer {
 struct TensorComplex {
     std::vector<std::complex<float>> data;
     std::vector<int64_t> shape;
-    // Default constructor
     TensorComplex() = default;
     // Copy constructor
     TensorComplex(const TensorComplex& other)

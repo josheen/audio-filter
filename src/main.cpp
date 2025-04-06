@@ -4,8 +4,7 @@
 #include <vector>
 #include <thread>
 #include <atomic>
-#include <DFNetwork.h>  // Include your DFNetwork header
-
+#include <DFNetwork.h>
 #define SAMPLE_RATE 48000
 #define CHANNELS 1
 
@@ -33,7 +32,6 @@ static int recordCallback(const void* input, void* output,
     auto* data = static_cast<RecorderData*>(userData);
     const float* in = static_cast<const float*>(input);
 
-    // Lock-free ring buffer approach (real-time safe)
     {
         std::lock_guard<std::mutex> lock(data->bufferMutex);
 
@@ -42,7 +40,6 @@ static int recordCallback(const void* input, void* output,
             data->inputRingBuffer.push_back(in[i]);
         }
 
-        // Process complete frames
         while (data->inputRingBuffer.size() >= data->hopSize) {
             // Prepare input matrix
             Eigen::MatrixXf noisy(1, data->hopSize);
@@ -72,7 +69,6 @@ static int recordCallback(const void* input, void* output,
 }
 
 int main() {
-    // Initialize DFNetwork
     DFParams params(ENC_MODEL_PATH, ERB_DEC_MODEL_PATH, DF_DEC_MODEL_PATH, CONFIG_PATH);
     RuntimeParams rp = RuntimeParams::default_with_ch(1);
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "dfnetwork");
