@@ -19,9 +19,16 @@ struct RecorderData {
 };
 
 const std::string MODEL_DIR = MODEL_PATH;
+#if NEW_MODEL
+const std::string ENC_MODEL_PATH = MODEL_DIR + "/new_models/enc.onnx";
+const std::string ERB_DEC_MODEL_PATH = MODEL_DIR + "/new_models/erb_dec.onnx";
+const std::string DF_DEC_MODEL_PATH = MODEL_DIR + "/new_models/df_dec.onnx";
+#else
 const std::string ENC_MODEL_PATH = MODEL_DIR + "/enc.onnx";
 const std::string ERB_DEC_MODEL_PATH = MODEL_DIR + "/erb_dec.onnx";
 const std::string DF_DEC_MODEL_PATH = MODEL_DIR + "/df_dec.onnx";
+
+#endif
 const std::string CONFIG_PATH = MODEL_DIR + "/config.ini";
 
 static int recordCallback(const void* input, void* output,

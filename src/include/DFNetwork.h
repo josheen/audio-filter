@@ -1,5 +1,6 @@
 #ifndef DF_NETWORK_H
 #define DF_NETWORK_H
+#define NEW_MODEL 0
 
 #include "DFParams.h"
 #include "DFState.h"
@@ -95,6 +96,16 @@ class DFNetwork {
         float post_filter_beta_;
         size_t skip_counter_;
         // Encoder I/O names
+#if NEW_MODEL
+        const std::array<const char*, 3> encoder_input_names_ = {"feat_erb", "feat_spec", "enc_hidden"};
+        const std::array<const char*, 8> encoder_output_names_ = {"e0", "e1", "e2", "e3", "emb", "c0", "lsnr", "new_enc_hidden"};
+        // ERB decoder I/O names
+        const std::array<const char*, 6> erb_input_names_ = {"emb", "e3", "e2", "e1", "e0", "erb_dec_hidden"};
+        const std::array<const char*, 2> erb_dec_output_names_ = {"gains", "new_erb_dec_hidden"};
+        // DF decoder I/O names
+        const std::array<const char*, 3> df_dec_input_names_ = {"emb", "c0", "df_dec_hidden"};
+        const std::array<const char*, 2> df_dec_output_names_ = {"coefs", "new_df_dec_hidden"};
+#else
         const std::array<const char*, 3> encoder_input_names_ = {"feat_erb", "feat_spec", "enc_hidden"};
         const std::array<const char*, 8> encoder_output_names_ = {"e0", "e1", "e2", "e3", "emb", "c0", "lsnr", "hidden"};
         // ERB decoder I/O names
@@ -103,6 +114,7 @@ class DFNetwork {
         // DF decoder I/O names
         const std::array<const char*, 3> df_dec_input_names_ = {"emb", "c0", "df_dec_hidden"};
         const std::array<const char*, 2> df_dec_output_names_ = {"coefs", "hidden"};
+#endif
 };
 
 #endif

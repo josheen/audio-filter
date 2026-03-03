@@ -21,11 +21,15 @@ set(FFTW_LIBRARY_DIR ${FFTW_ROOT}/lib)
 set(ONNX_ROOT ${PROJECT_SOURCE_DIR}/src/onnx)
 set(ONNX_LIBRARY_DIR ${ONNX_ROOT}/lib)
 
+set(LIBSNDFILE_ROOT ${PROJECT_SOURCE_DIR}/src/libsndfile)
+set(LIBSNDFILE_LIBRARY_DIR ${LIBSNDFILE_ROOT}/lib)
+
 find_library(FFTW_LIB fftw3f PATHS ${FFTW_LIBRARY_DIR})
 find_path(FFTW_INCLUDE_DIR fftw3.h PATHS ${FFTW_INCLUDE_DIR})
 
 find_library(ONNX_LIB onnxruntime PATHS ${ONNX_LIBRARY_DIR})
-add_subdirectory(third_party/portaudio external/libsndfile)
+find_library(LIBSNDFILE_LIB sndfile PATHS ${LIBSNDFILE_LIBRARY_DIR})
+add_subdirectory(third_party/portaudio third_party/libsndfile)
 
 add_executable(AudioFilter src/main.cpp)
 
@@ -48,8 +52,8 @@ target_link_libraries(AudioFilter
     runtime_params
     ${FFTW_LIB}
     ${ONNX_LIB}
+    ${LIBSNDFILE_LIB}
     portaudio
-    ${PROJECT_SOURCE_DIR}/src/lib/libsndfile.dylib
 )
 target_compile_definitions(AudioFilter PRIVATE
     MODEL_PATH="${CMAKE_SOURCE_DIR}/updated_model"
