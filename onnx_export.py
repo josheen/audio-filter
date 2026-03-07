@@ -1,5 +1,6 @@
 import copy
 import os
+import shutil
 import onnx
 import argparse
 import subprocess
@@ -394,7 +395,6 @@ def main():
         print_graph=True,
     )
     # Decompose GRU and validate
-    import shutil
     enc_pre_gru = path.replace(".onnx", "_pre_gru.onnx")
     shutil.copy2(path, enc_pre_gru)
     decompose_gru_in_onnx(path)
